@@ -114,3 +114,8 @@ export async function POST(req: Request) {
     updated: rows.length,
   });
 }
+
+export async function GET(req: Request) {
+  return POST(req);
+}
+
