@@ -50,8 +50,8 @@ function asInt(score?: string) {
 export async function POST(req: Request) {
   // Protect endpoint (recommended)
   const auth = req.headers.get("authorization");
-  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
+  return new Response("Unauthorized", { status: 401 });
   }
 
   const today = new Date();
