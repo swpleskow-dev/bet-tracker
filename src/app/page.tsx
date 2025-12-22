@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
+import { supabaseBrowser as supabase } from "@/lib/supabaseClient";
 import type { BetRow, GameRow } from "@/lib/evaluateBet";
 import { evaluateBet } from "@/lib/evaluateBet";
 
