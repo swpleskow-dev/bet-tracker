@@ -34,7 +34,7 @@ export async function GET(req: Request) {
 
   // ESPN scoreboard by date (YYYYMMDD)
   const espnDate = yyyymmdd(date);
-  const url = `https://site.api.espn.com/apis/v2/sports/football/nfl/scoreboard?dates=${espnDate}`;
+  const url = `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=${espnDate}`;
   const r = await fetch(url, { cache: "no-store" });
   if (!r.ok) {
     return NextResponse.json({ error: `ESPN fetch failed: ${r.status}` }, { status: 502 });
