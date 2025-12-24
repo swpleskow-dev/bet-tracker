@@ -3,10 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-const [gameSearch, setGameSearch] = useState("");
-const [selectedGame, setSelectedGame] = useState<Game | null>(null);
-
-
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -48,7 +44,7 @@ function todayISO() {
 }
 
 export default function Page() {
-  // Bets (simple MVP)
+  // Bets
   const [bets, setBets] = useState<Bet[]>([]);
   const [gameId, setGameId] = useState("");
   const [betType, setBetType] = useState("total");
@@ -56,7 +52,11 @@ export default function Page() {
   const [line, setLine] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  // Games-by-date UI
+  // Game search picker
+  const [gameSearch, setGameSearch] = useState("");
+  const [selectedGame, setSelectedGame] = useState<Game | null>(null);
+
+  // Games-by-date
   const [date, setDate] = useState<string>(todayISO());
   const [games, setGames] = useState<Game[]>([]);
   const [gamesLoading, setGamesLoading] = useState(false);
@@ -115,12 +115,22 @@ export default function Page() {
 
   useEffect(() => {
     loadGames(date);
+
+    // Clear selection when switching date (prevents selecting a game from another day)
+    setSelectedGame(null);
+    setGameId("");
+    setGameSearch("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
   async function addBet(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    if (!gameId) {
+      setError("Please select a game.");
+      return;
+    }
 
     const { error } = await supabase.from("bets").insert({
       game_id: gameId,
@@ -134,8 +144,14 @@ export default function Page() {
       return;
     }
 
-    setGameId("");
+    // reset form
+    setBetType("total");
+    setSelection("over");
     setLine("");
+    setSelectedGame(null);
+    setGameId("");
+    setGameSearch("");
+
     await loadBets();
   }
 
@@ -167,6 +183,14 @@ export default function Page() {
     await loadWatchlist();
   }
 
+  const filteredGames = useMemo(() => {
+    const q = gameSearch.trim().toLowerCase();
+    if (!q) return [];
+    return games
+      .filter((g) => g.home_team.toLowerCase().includes(q) || g.away_team.toLowerCase().includes(q))
+      .slice(0, 20);
+  }, [games, gameSearch]);
+
   return (
     <main style={{ maxWidth: 980, margin: "0 auto", padding: 24, fontFamily: "system-ui" }}>
       <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0 }}>Bet Tracker</h1>
@@ -176,78 +200,117 @@ export default function Page() {
       {/* Add bet */}
       <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16, marginTop: 16 }}>
         <h2 style={{ margin: 0, fontSize: 18 }}>Add a bet</h2>
-        <form onSubmit={addBet} style={{ display: "grid", gap: 10, marginTop: 12 }}>
-          <div style={{ position: "relative" }}>
-  <input
-    placeholder="Search game (team name)"
-    value={gameSearch}
-    onChange={(e) => setGameSearch(e.target.value)}
-  />
 
-  {gameSearch && (
-    <div
-      style={{
-        position: "absolute",
-        top: "100%",
-        left: 0,
-        right: 0,
-        background: "white",
-        border: "1px solid #ccc",
-        zIndex: 10,
-        maxHeight: 200,
-        overflowY: "auto",
-      }}
-    >
-      {games
-        .filter((g) => {
-          const q = gameSearch.toLowerCase();
-          return (
-            g.home_team.toLowerCase().includes(q) ||
-            g.away_team.toLowerCase().includes(q)
-          );
-        })
-        .map((g) => (
-          <div
-            key={g.game_id}
-            style={{ padding: 8, cursor: "pointer" }}
-            onClick={() => {
-              setSelectedGame(g);
-              setGameId(g.game_id);
-              setGameSearch(`${g.away_team} @ ${g.home_team}`);
+        <form onSubmit={addBet} style={{ display: "grid", gap: 10, marginTop: 12 }}>
+          {/* Search + select game */}
+          <div style={{ position: "relative" }}>
+            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Game (search by team)</div>
+            <input
+              placeholder="Type: KC, BUF, Eagles..."
+              value={gameSearch}
+              onChange={(e) => setGameSearch(e.target.value)}
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #ccc" }}
+            />
+
+            {!!filteredGames.length && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  right: 0,
+                  background: "white",
+                  border: "1px solid #ccc",
+                  borderRadius: 10,
+                  marginTop: 6,
+                  zIndex: 10,
+                  maxHeight: 240,
+                  overflowY: "auto",
+                }}
+              >
+                {filteredGames.map((g) => (
+                  <div
+                    key={g.game_id}
+                    style={{ padding: 10, cursor: "pointer", borderBottom: "1px solid #eee" }}
+                    onClick={() => {
+                      setSelectedGame(g);
+                      setGameId(g.game_id);
+                      setGameSearch(`${g.away_team} @ ${g.home_team}`);
+                    }}
+                  >
+                    <b>
+                      {g.away_team} @ {g.home_team}
+                    </b>{" "}
+                    — {g.away_score}-{g.home_score}{" "}
+                    {g.is_final ? "(Final)" : `(Q${g.period ?? "?"} ${g.clock ?? ""})`}{" "}
+                    <span style={{ opacity: 0.6 }}>id: {g.game_id}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {selectedGame && (
+            <div style={{ fontSize: 13, opacity: 0.85 }}>
+              Selected:{" "}
+              <b>
+                {selectedGame.away_team} @ {selectedGame.home_team}
+              </b>{" "}
+              <span style={{ opacity: 0.7 }}>(id: {selectedGame.game_id})</span>
+            </div>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <label>
+              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Bet type</div>
+              <select
+                value={betType}
+                onChange={(e) => setBetType(e.target.value)}
+                style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #ccc" }}
+              >
+                <option value="moneyline">moneyline</option>
+                <option value="spread">spread</option>
+                <option value="total">total</option>
+              </select>
+            </label>
+
+            <label>
+              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Selection</div>
+              <input
+                placeholder='e.g. "KC" or "over"'
+                value={selection}
+                onChange={(e) => setSelection(e.target.value)}
+                style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #ccc" }}
+                required
+              />
+            </label>
+          </div>
+
+          <label>
+            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Line (spread/total)</div>
+            <input
+              placeholder="e.g. -3.5 or 44.5"
+              value={line}
+              onChange={(e) => setLine(e.target.value)}
+              disabled={betType === "moneyline"}
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #ccc" }}
+            />
+          </label>
+
+          <button
+            type="submit"
+            style={{
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid #111",
+              background: "#111",
+              color: "white",
+              fontWeight: 700,
+              cursor: "pointer",
             }}
           >
-            {g.away_team} @ {g.home_team}{" "}
-            {g.is_final
-              ? `(Final ${g.away_score}-${g.home_score})`
-              : `(${g.away_score}-${g.home_score})`}
-          </div>
-        ))}
-    </div>
-  )}
-</div>
-
-
-          <select value={betType} onChange={(e) => setBetType(e.target.value)}>
-            <option value="moneyline">moneyline</option>
-            <option value="spread">spread</option>
-            <option value="total">total</option>
-          </select>
-
-          <input
-            placeholder='Selection (e.g. "KC" or "over")'
-            value={selection}
-            onChange={(e) => setSelection(e.target.value)}
-            required
-          />
-
-          <input
-            placeholder="Line (spread/total)"
-            value={line}
-            onChange={(e) => setLine(e.target.value)}
-            disabled={betType === "moneyline"}
-          />
-
-          <button type="submit">Add Bet</button>
+            Add Bet
+          </button>
         </form>
       </div>
 
