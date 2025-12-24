@@ -35,7 +35,7 @@ export default function Page() {
   // Bet form
   const [gameId, setGameId] = useState("");
   const [betType, setBetType] = useState("total");
-  const [selection, setSelection] = useState("over");
+  const [selection, setSelection] = useState("");
   const [line, setLine] = useState("");
 
   // Game search
