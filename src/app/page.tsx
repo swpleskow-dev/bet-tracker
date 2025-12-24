@@ -22,9 +22,14 @@ export default function Page() {
   const [betType, setBetType] = useState("total");
   const [selection, setSelection] = useState("over");
   const [line, setLine] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   async function loadBets() {
-    const { data } = await supabase.from("bets").select("*");
+    const { data, error } = await supabase.from("bets").select("*");
+    if (error) {
+      setError(error.message);
+      return;
+    }
     setBets((data ?? []) as Bet[]);
   }
 
@@ -34,17 +39,24 @@ export default function Page() {
 
   async function addBet(e: React.FormEvent) {
     e.preventDefault();
+    setError(null);
 
-    await supabase.from("bets").insert({
+    const { error } = await supabase.from("bets").insert({
       game_id: gameId,
       bet_type: betType,
       selection,
       line: line ? Number(line) : null,
     });
 
+    if (error) {
+      console.log("INSERT ERROR:", error);
+      setError(error.message);
+      return;
+    }
+
     setGameId("");
     setLine("");
-    loadBets();
+    await loadBets();
   }
 
   return (
@@ -56,6 +68,7 @@ export default function Page() {
           placeholder="Game ID"
           value={gameId}
           onChange={(e) => setGameId(e.target.value)}
+          required
         />
 
         <select value={betType} onChange={(e) => setBetType(e.target.value)}>
@@ -68,16 +81,20 @@ export default function Page() {
           placeholder="Selection"
           value={selection}
           onChange={(e) => setSelection(e.target.value)}
+          required
         />
 
         <input
           placeholder="Line"
           value={line}
           onChange={(e) => setLine(e.target.value)}
+          disabled={betType === "moneyline"}
         />
 
         <button type="submit">Add Bet</button>
       </form>
+
+      {error && <div style={{ color: "red" }}>{error}</div>}
 
       <ul>
         {bets.map((b) => (
@@ -89,16 +106,4 @@ export default function Page() {
       </ul>
     </main>
   );
-}
-const { error } = await supabase.from("bets").insert({
-  game_id: gameId,
-  bet_type: betType,
-  selection,
-  line: line ? Number(line) : null,
-});
-
-if (error) {
-  console.log("INSERT ERROR:", error);
-  alert(error.message);
-  return;
 }
