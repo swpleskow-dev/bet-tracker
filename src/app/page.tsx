@@ -10,6 +10,9 @@ const supabase = createClient(
 
 const USER_ID = "demo-user"; // change later when you add auth
 
+const BETTORS = ["sydney", "william"] as const;
+type Bettor = (typeof BETTORS)[number];
+
 type BetType = "moneyline" | "spread" | "total";
 
 type Bet = {
@@ -22,9 +25,9 @@ type Bet = {
   line: number | null;
   created_at: string;
 
-  // NEW: tracking money
   stake: number; // amount risked
   odds: number; // American odds (-110, +150, etc.)
+  bettor: Bettor; // NEW
 };
 
 type GameRow = {
@@ -137,18 +140,57 @@ function betProfit(b: Bet, g?: GameRow) {
   return 0; // Pending / Push / No game data
 }
 
+type Summary = {
+  wins: number;
+  losses: number;
+  pushes: number;
+  pending: number;
+  totalWinnings: number; // sum of profits on wins
+  totalLosses: number; // sum of stakes on losses
+  net: number; // winnings - losses
+};
+
+function computeSummary(bets: Bet[], gamesById: Record<string, GameRow>): Summary {
+  return bets.reduce(
+    (acc, b) => {
+      const g = gamesById[b.game_id];
+      const r = calcResult(b, g);
+
+      if (r.label === "Won") {
+        const p = profitFromAmericanOdds(Number(b.stake ?? 0), Number(b.odds ?? 0));
+        acc.wins += 1;
+        acc.totalWinnings += p;
+        acc.net += p;
+      } else if (r.label === "Lost") {
+        const s = Number(b.stake ?? 0);
+        acc.losses += 1;
+        acc.totalLosses += s;
+        acc.net -= s;
+      } else if (r.label === "Push") {
+        acc.pushes += 1;
+      } else if (r.label === "Pending") {
+        acc.pending += 1;
+      }
+
+      return acc;
+    },
+    { wins: 0, losses: 0, pushes: 0, pending: 0, totalWinnings: 0, totalLosses: 0, net: 0 }
+  );
+}
+
 export default function Page() {
   const [bets, setBets] = useState<Bet[]>([]);
   const [gamesById, setGamesById] = useState<Record<string, GameRow>>({});
 
   // bet form
+  const [bettor, setBettor] = useState<Bettor>("sydney"); // NEW
   const [gameId, setGameId] = useState("");
   const [selectedGame, setSelectedGame] = useState<GameRow | null>(null);
   const [betType, setBetType] = useState<BetType>("total");
   const [selection, setSelection] = useState<string>("over");
   const [line, setLine] = useState<string>("");
 
-  // NEW: stake + odds
+  // stake + odds
   const [stake, setStake] = useState<string>("1");
   const [odds, setOdds] = useState<string>("-110");
 
@@ -158,6 +200,9 @@ export default function Page() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const searchBoxRef = useRef<HTMLDivElement | null>(null);
+
+  // NEW: viewing filter
+  const [viewBettor, setViewBettor] = useState<"all" | Bettor>("all");
 
   const [error, setError] = useState<string | null>(null);
 
@@ -175,7 +220,13 @@ export default function Page() {
       return;
     }
 
-    const betRows = (betData ?? []) as Bet[];
+    // normalize bettor in case older rows exist
+    const betRowsRaw = (betData ?? []) as any[];
+    const betRows = betRowsRaw.map((b) => ({
+      ...b,
+      bettor: (String(b.bettor || "sydney").toLowerCase() as Bettor),
+    })) as Bet[];
+
     setBets(betRows);
 
     const ids = Array.from(new Set(betRows.map((b) => b.game_id).filter(Boolean)));
@@ -286,11 +337,12 @@ export default function Page() {
 
       stake: stakeNum,
       odds: oddsNum,
+      bettor, // NEW
     });
 
     if (error) return setError(error.message);
 
-    // reset
+    // reset (keep bettor as-is)
     setLine("");
     setBetType("total");
     setSelection("over");
@@ -303,7 +355,6 @@ export default function Page() {
   async function deleteBet(betId: string) {
     setError(null);
 
-    // select("id") makes it easy to detect "no row deleted"
     const { data, error } = await supabase
       .from("bets")
       .delete()
@@ -341,42 +392,58 @@ export default function Page() {
       </select>
     );
 
-  // ---- Summary ----
-  const summary = bets.reduce(
-    (acc, b) => {
-      const g = gamesById[b.game_id];
-      const r = calcResult(b, g);
+  // ---- Filtered bets ----
+  const visibleBets = viewBettor === "all" ? bets : bets.filter((b) => b.bettor === viewBettor);
 
-      if (r.label === "Won") {
-        const p = profitFromAmericanOdds(Number(b.stake ?? 0), Number(b.odds ?? 0));
-        acc.wins += 1;
-        acc.totalWinnings += p;
-        acc.net += p;
-      } else if (r.label === "Lost") {
-        const s = Number(b.stake ?? 0);
-        acc.losses += 1;
-        acc.totalLosses += s;
-        acc.net -= s;
-      } else if (r.label === "Push") {
-        acc.pushes += 1;
-      } else if (r.label === "Pending") {
-        acc.pending += 1;
-      }
+  // ---- Summaries ----
+  const summaryAll = computeSummary(bets, gamesById);
+  const summarySydney = computeSummary(bets.filter((b) => b.bettor === "sydney"), gamesById);
+  const summaryWilliam = computeSummary(bets.filter((b) => b.bettor === "william"), gamesById);
 
-      return acc;
-    },
-    { wins: 0, losses: 0, pushes: 0, pending: 0, totalWinnings: 0, totalLosses: 0, net: 0 }
-  );
+  function SummaryCard({ title, s }: { title: string; s: Summary }) {
+    return (
+      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 14, minWidth: 260 }}>
+        <div style={{ fontWeight: 900, marginBottom: 8 }}>{title}</div>
+        <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
+          <div>
+            <b>Record:</b> {s.wins}-{s.losses}-{s.pushes} <span style={{ opacity: 0.7 }}>(Pending: {s.pending})</span>
+          </div>
+          <div>
+            <b>Total Winnings:</b> ${s.totalWinnings.toFixed(2)}
+          </div>
+          <div>
+            <b>Total Losses:</b> ${s.totalLosses.toFixed(2)}
+          </div>
+          <div>
+            <b>Net:</b>{" "}
+            <span style={{ fontWeight: 900 }}>
+              {s.net >= 0 ? "+" : "-"}${Math.abs(s.net).toFixed(2)}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <main style={{ maxWidth: 900, margin: "0 auto", padding: 24, fontFamily: "system-ui" }}>
       <h1 style={{ fontSize: 28, fontWeight: 800 }}>Bet Tracker</h1>
       {error && <div style={{ color: "crimson", marginBottom: 10 }}>{error}</div>}
 
+      {/* Add Bet */}
       <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16 }}>
         <h2 style={{ marginTop: 0 }}>Add a bet</h2>
 
         <form onSubmit={addBet} style={{ display: "grid", gap: 12 }}>
+          {/* NEW: Bettor dropdown */}
+          <div>
+            <label style={labelStyle}>Who placed the bet?</label>
+            <select value={bettor} onChange={(e) => setBettor(e.target.value as Bettor)} style={inputStyle}>
+              <option value="sydney">sydney</option>
+              <option value="william">william</option>
+            </select>
+          </div>
+
           <div ref={searchBoxRef} style={{ position: "relative" }}>
             <label style={labelStyle}>Game (search by team)</label>
             <input
@@ -490,40 +557,36 @@ export default function Page() {
         </form>
       </div>
 
-      <div style={{ marginTop: 16, border: "1px solid #ddd", borderRadius: 12, padding: 16 }}>
-        <div style={{ fontWeight: 900, marginBottom: 8 }}>Summary</div>
-
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "baseline" }}>
-          <div>
-            <b>Record:</b> {summary.wins}-{summary.losses}-{summary.pushes}{" "}
-            <span style={{ opacity: 0.7 }}>(Pending: {summary.pending})</span>
-          </div>
-
-          <div>
-            <b>Total Winnings:</b> ${summary.totalWinnings.toFixed(2)}
-          </div>
-
-          <div>
-            <b>Total Losses:</b> ${summary.totalLosses.toFixed(2)}
-          </div>
-
-          <div>
-            <b>Net:</b>{" "}
-            <span style={{ fontWeight: 900 }}>
-              {summary.net >= 0 ? "+" : "-"}${Math.abs(summary.net).toFixed(2)}
-            </span>
-          </div>
+      {/* Summaries */}
+      <div style={{ marginTop: 16 }}>
+        <h2 style={{ marginBottom: 10 }}>Summary</h2>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <SummaryCard title="All" s={summaryAll} />
+          <SummaryCard title="Sydney" s={summarySydney} />
+          <SummaryCard title="William" s={summaryWilliam} />
         </div>
       </div>
 
+      {/* Filter + Bets */}
       <div style={{ marginTop: 24 }}>
-        <h2 style={{ marginBottom: 8 }}>My Bets</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap" }}>
+          <h2 style={{ marginBottom: 8 }}>My Bets</h2>
 
-        {bets.length === 0 ? (
+          <div style={{ minWidth: 220 }}>
+            <label style={labelStyle}>View bets for</label>
+            <select value={viewBettor} onChange={(e) => setViewBettor(e.target.value as any)} style={inputStyle}>
+              <option value="all">all</option>
+              <option value="sydney">sydney</option>
+              <option value="william">william</option>
+            </select>
+          </div>
+        </div>
+
+        {visibleBets.length === 0 ? (
           <div style={{ opacity: 0.7 }}>No bets yet.</div>
         ) : (
           <div style={{ display: "grid", gap: 10 }}>
-            {bets.map((b) => {
+            {visibleBets.map((b) => {
               const g = gamesById[b.game_id];
               const r = calcResult(b, g);
               const profit = betProfit(b, g);
@@ -548,7 +611,7 @@ export default function Page() {
                     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                       <Pill text={r.label} tone={r.tone} />
                       <div style={{ fontWeight: 800 }}>
-                        {b.bet_type} — {b.selection} {b.line !== null ? `(${b.line})` : ""}
+                        {b.bettor} • {b.bet_type} — {b.selection} {b.line !== null ? `(${b.line})` : ""}
                       </div>
                     </div>
 
