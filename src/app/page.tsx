@@ -8,12 +8,19 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
+const USER_ID = "demo-user"; // change later when you add auth
+
+type BetType = "moneyline" | "spread" | "total";
+
 type Bet = {
   id: string;
+  user_id: string | null;
+  sport: string;
   game_id: string;
-  bet_type: string;
+  bet_type: BetType;
   selection: string;
   line: number | null;
+  created_at: string;
 };
 
 type GameRow = {
@@ -28,8 +35,6 @@ type GameRow = {
   clock: string | null;
 };
 
-type BetType = "moneyline" | "spread" | "total";
-
 function statusText(g: GameRow) {
   if (g.is_final) return "Final";
   if (g.period != null || g.clock) {
@@ -40,6 +45,81 @@ function statusText(g: GameRow) {
   return "Scheduled";
 }
 
+function calcResult(b: Bet, g?: GameRow) {
+  if (!g) return { label: "No game data", tone: "neutral" as const };
+  const hs = g.home_score ?? 0;
+  const as = g.away_score ?? 0;
+
+  // if not final, treat as pending
+  if (!g.is_final) return { label: "Pending", tone: "neutral" as const };
+
+  const away = g.away_team;
+  const home = g.home_team;
+
+  if (b.bet_type === "total") {
+    const line = Number(b.line ?? NaN);
+    if (!Number.isFinite(line)) return { label: "Pending", tone: "neutral" as const };
+
+    const total = hs + as;
+    const pick = b.selection.toLowerCase();
+
+    if (total === line) return { label: "Push", tone: "neutral" as const };
+    const won = pick === "over" ? total > line : pick === "under" ? total < line : false;
+    return won ? { label: "Won", tone: "good" as const } : { label: "Lost", tone: "bad" as const };
+  }
+
+  if (b.bet_type === "spread") {
+    const line = Number(b.line ?? NaN);
+    if (!Number.isFinite(line)) return { label: "Pending", tone: "neutral" as const };
+
+    const pick = b.selection.toUpperCase();
+    const pickedAway = pick === away;
+    const pickedHome = pick === home;
+    if (!pickedAway && !pickedHome) return { label: "Pending", tone: "neutral" as const };
+
+    const diffFromPick =
+      pickedHome ? (hs - as) + line : (as - hs) + line;
+
+    if (diffFromPick === 0) return { label: "Push", tone: "neutral" as const };
+    return diffFromPick > 0 ? { label: "Won", tone: "good" as const } : { label: "Lost", tone: "bad" as const };
+  }
+
+  // moneyline
+  const pick = b.selection.toUpperCase();
+  const pickedAway = pick === away;
+  const pickedHome = pick === home;
+  if (!pickedAway && !pickedHome) return { label: "Pending", tone: "neutral" as const };
+
+  const won =
+    pickedHome ? hs > as :
+    pickedAway ? as > hs :
+    false;
+
+  if (hs === as) return { label: "Push", tone: "neutral" as const };
+  return won ? { label: "Won", tone: "good" as const } : { label: "Lost", tone: "bad" as const };
+}
+
+function Pill({ text, tone }: { text: string; tone: "good" | "bad" | "neutral" }) {
+  const bg =
+    tone === "good" ? "#e9f7ef" : tone === "bad" ? "#fdecec" : "#f4f4f5";
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "3px 10px",
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 800,
+        border: "1px solid #ddd",
+        background: bg,
+        marginRight: 8,
+      }}
+    >
+      {text}
+    </span>
+  );
+}
+
 export default function Page() {
   const [bets, setBets] = useState<Bet[]>([]);
   const [gamesById, setGamesById] = useState<Record<string, GameRow>>({});
@@ -47,7 +127,6 @@ export default function Page() {
   // bet form
   const [gameId, setGameId] = useState("");
   const [selectedGame, setSelectedGame] = useState<GameRow | null>(null);
-
   const [betType, setBetType] = useState<BetType>("total");
   const [selection, setSelection] = useState<string>("over");
   const [line, setLine] = useState<string>("");
@@ -57,18 +136,18 @@ export default function Page() {
   const [searchResults, setSearchResults] = useState<GameRow[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
+  const searchBoxRef = useRef<HTMLDivElement | null>(null);
 
   const [error, setError] = useState<string | null>(null);
-  const searchBoxRef = useRef<HTMLDivElement | null>(null);
 
   async function loadAll() {
     setError(null);
 
-    // 1) bets
     const { data: betData, error: betErr } = await supabase
       .from("bets")
       .select("*")
-      .order("id", { ascending: false });
+      .eq("user_id", USER_ID)
+      .order("created_at", { ascending: false });
 
     if (betErr) {
       setError(betErr.message);
@@ -78,11 +157,7 @@ export default function Page() {
     const betRows = (betData ?? []) as Bet[];
     setBets(betRows);
 
-    // 2) games for those bets
-    const ids = Array.from(
-      new Set(betRows.map((b) => b.game_id).filter(Boolean))
-    );
-
+    const ids = Array.from(new Set(betRows.map((b) => b.game_id).filter(Boolean)));
     if (ids.length === 0) {
       setGamesById({});
       return;
@@ -90,9 +165,7 @@ export default function Page() {
 
     const { data: gameData, error: gameErr } = await supabase
       .from("games")
-      .select(
-        "game_id, game_date, home_team, away_team, home_score, away_score, is_final, period, clock"
-      )
+      .select("game_id, game_date, home_team, away_team, home_score, away_score, is_final, period, clock")
       .in("game_id", ids);
 
     if (gameErr) {
@@ -107,6 +180,9 @@ export default function Page() {
 
   useEffect(() => {
     loadAll();
+    // refresh so results/status update
+    const t = setInterval(loadAll, 30_000);
+    return () => clearInterval(t);
   }, []);
 
   // close search dropdown on outside click
@@ -119,7 +195,7 @@ export default function Page() {
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  // debounced search (hits your /api/nfl/search)
+  // debounced search
   useEffect(() => {
     const q = gameSearch.trim();
     if (q.length < 2) {
@@ -132,9 +208,7 @@ export default function Page() {
 
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(q)}`, {
-          cache: "no-store",
-        });
+        const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
         const j = await r.json();
         setSearchResults((j.games ?? []) as GameRow[]);
         setSearchOpen(true);
@@ -148,62 +222,44 @@ export default function Page() {
     return () => clearTimeout(t);
   }, [gameSearch]);
 
-  // intuitive selection rules
+  // intuitive selection
   useEffect(() => {
     if (betType === "total") {
       setSelection((prev) => (prev === "under" ? "under" : "over"));
       return;
     }
-
     if (!selectedGame) {
       setSelection("");
       return;
     }
-
     const away = selectedGame.away_team;
     const home = selectedGame.home_team;
-
-    setSelection((prev) => {
-      if (prev === away || prev === home) return prev;
-      return away;
-    });
+    setSelection((prev) => (prev === away || prev === home ? prev : away));
   }, [betType, selectedGame]);
 
   async function addBet(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
-    if (!gameId) {
-      setError("Please select a game.");
-      return;
-    }
+    if (!gameId) return setError("Please select a game.");
+    if (!selection.trim()) return setError("Please choose a selection.");
 
     if (betType !== "moneyline") {
       const parsed = Number(line);
-      if (!line.trim() || Number.isNaN(parsed)) {
-        setError("Line must be a number for spread/total.");
-        return;
-      }
-    }
-
-    if (!selection.trim()) {
-      setError("Please choose a selection.");
-      return;
+      if (!line.trim() || Number.isNaN(parsed)) return setError("Line must be a number for spread/total.");
     }
 
     const { error } = await supabase.from("bets").insert({
+      user_id: USER_ID,
+      sport: "NFL",
       game_id: gameId,
       bet_type: betType,
       selection,
       line: betType === "moneyline" ? null : Number(line),
     });
 
-    if (error) {
-      setError(error.message);
-      return;
-    }
+    if (error) return setError(error.message);
 
-    // reset form
     setLine("");
     setBetType("total");
     setSelection("over");
@@ -213,11 +269,7 @@ export default function Page() {
 
   const selectionUI =
     betType === "total" ? (
-      <select
-        value={selection}
-        onChange={(e) => setSelection(e.target.value)}
-        style={inputStyle}
-      >
+      <select value={selection} onChange={(e) => setSelection(e.target.value)} style={inputStyle}>
         <option value="over">over</option>
         <option value="under">under</option>
       </select>
@@ -228,40 +280,25 @@ export default function Page() {
         style={inputStyle}
         disabled={!selectedGame}
       >
-        <option value="">
-          {selectedGame ? "Select team…" : "Pick a game first…"}
-        </option>
+        <option value="">{selectedGame ? "Select team…" : "Pick a game first…"}</option>
         {selectedGame && (
           <>
-            <option value={selectedGame.away_team}>
-              {selectedGame.away_team} (away)
-            </option>
-            <option value={selectedGame.home_team}>
-              {selectedGame.home_team} (home)
-            </option>
+            <option value={selectedGame.away_team}>{selectedGame.away_team} (away)</option>
+            <option value={selectedGame.home_team}>{selectedGame.home_team} (home)</option>
           </>
         )}
       </select>
     );
 
   return (
-    <main
-      style={{
-        maxWidth: 900,
-        margin: "0 auto",
-        padding: 24,
-        fontFamily: "system-ui",
-      }}
-    >
+    <main style={{ maxWidth: 900, margin: "0 auto", padding: 24, fontFamily: "system-ui" }}>
       <h1 style={{ fontSize: 28, fontWeight: 800 }}>Bet Tracker</h1>
-
       {error && <div style={{ color: "crimson", marginBottom: 10 }}>{error}</div>}
 
       <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16 }}>
         <h2 style={{ marginTop: 0 }}>Add a bet</h2>
 
         <form onSubmit={addBet} style={{ display: "grid", gap: 12 }}>
-          {/* Game picker */}
           <div ref={searchBoxRef} style={{ position: "relative" }}>
             <label style={labelStyle}>Game (search by team)</label>
             <input
@@ -299,9 +336,7 @@ export default function Page() {
                       onClick={() => {
                         setSelectedGame(g);
                         setGameId(g.game_id);
-                        setGameSearch(
-                          `${g.away_team} @ ${g.home_team} — ${g.game_date}`
-                        );
+                        setGameSearch(`${g.away_team} @ ${g.home_team} — ${g.game_date}`);
                         setSearchOpen(false);
                       }}
                     >
@@ -309,8 +344,7 @@ export default function Page() {
                         {g.away_team} @ {g.home_team}
                       </div>
                       <div style={{ fontSize: 12, opacity: 0.75 }}>
-                        {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} •{" "}
-                        {statusText(g)}
+                        {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} • {statusText(g)}
                       </div>
                     </div>
                   ))
@@ -319,15 +353,10 @@ export default function Page() {
             )}
           </div>
 
-          {/* Bet type + Selection */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div>
               <label style={labelStyle}>Bet type</label>
-              <select
-                value={betType}
-                onChange={(e) => setBetType(e.target.value as BetType)}
-                style={inputStyle}
-              >
+              <select value={betType} onChange={(e) => setBetType(e.target.value as BetType)} style={inputStyle}>
                 <option value="moneyline">moneyline</option>
                 <option value="spread">spread</option>
                 <option value="total">total</option>
@@ -340,23 +369,12 @@ export default function Page() {
             </div>
           </div>
 
-          {/* Line */}
           <div>
             <label style={labelStyle}>
-              {betType === "spread"
-                ? "Spread (required)"
-                : betType === "total"
-                ? "Total (required)"
-                : "Line"}
+              {betType === "spread" ? "Spread (required)" : betType === "total" ? "Total (required)" : "Line"}
             </label>
             <input
-              placeholder={
-                betType === "spread"
-                  ? "e.g. -3.5"
-                  : betType === "total"
-                  ? "e.g. 44.5"
-                  : "—"
-              }
+              placeholder={betType === "spread" ? "e.g. -3.5" : betType === "total" ? "e.g. 44.5" : "—"}
               value={line}
               onChange={(e) => setLine(e.target.value)}
               style={inputStyle}
@@ -376,24 +394,29 @@ export default function Page() {
         {bets.length === 0 ? (
           <div style={{ opacity: 0.7 }}>No bets yet.</div>
         ) : (
-          <ul style={{ paddingLeft: 18 }}>
+          <div style={{ display: "grid", gap: 10 }}>
             {bets.map((b) => {
               const g = gamesById[b.game_id];
+              const r = calcResult(b, g);
 
-              const label = g
-                ? `${g.away_team} @ ${g.home_team} — ${g.game_date} • ${g.away_score ?? 0}-${g.home_score ?? 0} • ${statusText(
-                    g
-                  )}`
+              const gameLabel = g
+                ? `${g.away_team} @ ${g.home_team} — ${g.game_date} • ${g.away_score ?? 0}-${g.home_score ?? 0} • ${statusText(g)}`
                 : b.game_id;
 
               return (
-                <li key={b.id} style={{ marginBottom: 6 }}>
-                  {b.bet_type} – {b.selection}{" "}
-                  {b.line !== null && `(${b.line})`} — {label}
-                </li>
+                <div key={b.id} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <Pill text={r.label} tone={r.tone} />
+                    <div style={{ fontWeight: 800 }}>
+                      {b.bet_type} — {b.selection} {b.line !== null ? `(${b.line})` : ""}
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 6, opacity: 0.85, fontSize: 13 }}>{gameLabel}</div>
+                </div>
               );
             })}
-          </ul>
+          </div>
         )}
       </div>
     </main>
@@ -443,3 +466,4 @@ const rowStyle: React.CSSProperties = {
   cursor: "pointer",
   borderBottom: "1px solid #eee",
 };
+
