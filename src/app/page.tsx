@@ -2,8 +2,8 @@
 
 import React, { useEffect, useState } from "react";
 // import { supabaseBrowser as supabase } from "@/lib/supabaseClient";
-import type { BetRow, GameRow } from "@/lib/evaluateBet";
-import { evaluateBet } from "@/lib/evaluateBet";
+// import type { BetRow, GameRow } from "@/lib/evaluateBet";
+// import { evaluateBet } from "@/lib/evaluateBet";
 
 
 const USER_ID = "demo-user";
