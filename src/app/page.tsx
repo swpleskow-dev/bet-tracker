@@ -10,8 +10,6 @@ const supabase = createClient(
 
 type Bet = {
   id: string;
-  created_at?: string;
-  user_id?: string | null;
   game_id: string;
   bet_type: string;
   selection: string;
@@ -20,7 +18,7 @@ type Bet = {
 
 type GameSearchRow = {
   game_id: string;
-  date: string; // date or ISO string
+  game_date: string; // YYYY-MM-DD
   home_team: string;
   away_team: string;
   home_score: number | null;
@@ -31,34 +29,35 @@ type GameSearchRow = {
 };
 
 export default function Page() {
+  // Bets
   const [bets, setBets] = useState<Bet[]>([]);
 
-  // bet form
+  // Bet form
   const [gameId, setGameId] = useState("");
   const [betType, setBetType] = useState("total");
   const [selection, setSelection] = useState("over");
   const [line, setLine] = useState("");
 
-  // game search (hits /api/nfl/search)
+  // Game search
   const [gameSearch, setGameSearch] = useState("");
   const [searchResults, setSearchResults] = useState<GameSearchRow[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
-
   const searchBoxRef = useRef<HTMLDivElement | null>(null);
 
   async function loadBets() {
     const { data, error } = await supabase
       .from("bets")
       .select("*")
-      .order("created_at", { ascending: false });
+      .order("id", { ascending: false });
 
     if (error) {
       setError(error.message);
       return;
     }
+
     setBets((data ?? []) as Bet[]);
   }
 
@@ -66,22 +65,21 @@ export default function Page() {
     loadBets();
   }, []);
 
-  // close dropdown when clicking outside
+  // close dropdown on outside click
   useEffect(() => {
-    function onDocClick(e: MouseEvent) {
+    function onClick(e: MouseEvent) {
       if (!searchBoxRef.current) return;
       if (!searchBoxRef.current.contains(e.target as Node)) {
         setSearchOpen(false);
       }
     }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  // debounced search via API
+  // debounced search
   useEffect(() => {
     const q = gameSearch.trim();
-
     if (q.length < 2) {
       setSearchResults([]);
       setSearchLoading(false);
@@ -92,21 +90,11 @@ export default function Page() {
 
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(q)}`, {
-          cache: "no-store",
-        });
-
+        const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(q)}`);
         const j = await r.json();
-        if (!r.ok) {
-          console.log("Search error:", j);
-          setSearchResults([]);
-          return;
-        }
-
         setSearchResults((j.games ?? []) as GameSearchRow[]);
         setSearchOpen(true);
-      } catch (e: any) {
-        console.log("Search failed:", e?.message ?? e);
+      } catch {
         setSearchResults([]);
       } finally {
         setSearchLoading(false);
@@ -120,21 +108,21 @@ export default function Page() {
     e.preventDefault();
     setError(null);
 
-    if (!gameId.trim()) {
-      setError("Pick a game first (click a search result).");
+    if (!gameId) {
+      setError("Please select a game");
       return;
     }
 
     const parsedLine = line.trim() === "" ? null : Number(line);
-    if (line.trim() !== "" && Number.isNaN(parsedLine)) {
-      setError("Line must be a number (or leave blank).");
+    if (line && Number.isNaN(parsedLine)) {
+      setError("Line must be a number");
       return;
     }
 
     const { error } = await supabase.from("bets").insert({
-      game_id: gameId.trim(),
+      game_id: gameId,
       bet_type: betType,
-      selection: selection.trim(),
+      selection,
       line: parsedLine,
     });
 
@@ -143,7 +131,7 @@ export default function Page() {
       return;
     }
 
-    // reset form
+    // reset
     setGameId("");
     setGameSearch("");
     setLine("");
@@ -156,77 +144,54 @@ export default function Page() {
   }
 
   return (
-    <main style={{ maxWidth: 980, margin: "0 auto", padding: 24, fontFamily: "system-ui" }}>
-      <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0 }}>Bet Tracker</h1>
+    <main style={{ maxWidth: 900, margin: "0 auto", padding: 24, fontFamily: "system-ui" }}>
+      <h1 style={{ fontSize: 28, fontWeight: 800 }}>Bet Tracker</h1>
 
-      <div style={{ marginTop: 16, border: "1px solid #e5e5e5", borderRadius: 12, padding: 16 }}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>Add a bet</h2>
+      {error && <div style={{ color: "crimson", marginBottom: 10 }}>{error}</div>}
 
-        <form onSubmit={addBet} style={{ display: "grid", gap: 12, marginTop: 12 }}>
-          {/* Game search */}
+      {/* Add bet */}
+      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16 }}>
+        <h2>Add a bet</h2>
+
+        <form onSubmit={addBet} style={{ display: "grid", gap: 12 }}>
+          {/* Game picker */}
           <div ref={searchBoxRef} style={{ position: "relative" }}>
-            <div style={labelStyle}>Game (search by team)</div>
+            <label style={labelStyle}>Game (search by team)</label>
             <input
               value={gameSearch}
               onChange={(e) => {
                 setGameSearch(e.target.value);
                 setSearchOpen(true);
               }}
-              onFocus={() => setSearchOpen(true)}
-              placeholder="Type a team: DAL, Cowboys, Eagles..."
+              placeholder="DAL, Cowboys, Eagles…"
               style={inputStyle}
             />
 
-            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
-              Selected game_id: <b>{gameId || "—"}</b>
-            </div>
-
             {searchOpen && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 76,
-                  left: 0,
-                  right: 0,
-                  zIndex: 20,
-                  border: "1px solid #e5e5e5",
-                  borderRadius: 12,
-                  background: "white",
-                  boxShadow: "0 8px 30px rgba(0,0,0,0.08)",
-                  overflow: "hidden",
-                  maxHeight: 300,
-                  overflowY: "auto",
-                }}
-              >
+              <div style={dropdownStyle}>
                 {searchLoading ? (
-                  <div style={{ padding: 12, opacity: 0.7 }}>Searching…</div>
-                ) : gameSearch.trim().length < 2 ? (
-                  <div style={{ padding: 12, opacity: 0.7 }}>Type at least 2 characters…</div>
+                  <div style={rowStyle}>Searching…</div>
                 ) : searchResults.length === 0 ? (
-                  <div style={{ padding: 12, opacity: 0.7 }}>No matches.</div>
+                  <div style={rowStyle}>No matches</div>
                 ) : (
                   searchResults.map((g) => (
                     <div
                       key={g.game_id}
+                      style={rowStyle}
                       onClick={() => {
                         setGameId(g.game_id);
-                        setGameSearch(`${g.away_team} @ ${g.home_team} (${g.date})`);
+                        setGameSearch(
+                          `${g.away_team} @ ${g.home_team} — ${g.game_date}`
+                        );
                         setSearchOpen(false);
-                      }}
-                      style={{
-                        padding: 12,
-                        cursor: "pointer",
-                        borderBottom: "1px solid #f3f3f3",
                       }}
                     >
                       <div style={{ fontWeight: 700 }}>
                         {g.away_team} @ {g.home_team}
-                        <span style={{ fontWeight: 400, opacity: 0.7 }}> • {g.date}</span>
                       </div>
-                      <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
-                        {(g.away_score ?? 0)}-{(g.home_score ?? 0)}{" "}
-                        {g.is_final ? "• Final" : g.period ? `• Q${g.period} ${g.clock ?? ""}` : ""}
-                        <span style={{ opacity: 0.6 }}> • id: {g.game_id}</span>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>
+                        {g.game_date} • {g.away_score ?? 0}-{g.home_score ?? 0}{" "}
+                        {g.is_final ? "Final" : g.period ? `Q${g.period} ${g.clock ?? ""}` : ""}
                       </div>
                     </div>
                   ))
@@ -236,86 +201,82 @@ export default function Page() {
           </div>
 
           {/* Bet fields */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <label>
-              <div style={labelStyle}>Bet type</div>
-              <select value={betType} onChange={(e) => setBetType(e.target.value)} style={inputStyle}>
-                <option value="moneyline">moneyline</option>
-                <option value="spread">spread</option>
-                <option value="total">total</option>
-              </select>
-            </label>
+          <select value={betType} onChange={(e) => setBetType(e.target.value)} style={inputStyle}>
+            <option value="moneyline">moneyline</option>
+            <option value="spread">spread</option>
+            <option value="total">total</option>
+          </select>
 
-            <label>
-              <div style={labelStyle}>Selection</div>
-              <input
-                value={selection}
-                onChange={(e) => setSelection(e.target.value)}
-                placeholder='over / under or team (ex: KC)'
-                style={inputStyle}
-                required
-              />
-            </label>
-          </div>
+          <input
+            placeholder="Selection (over / under / team)"
+            value={selection}
+            onChange={(e) => setSelection(e.target.value)}
+            style={inputStyle}
+          />
 
-          <label>
-            <div style={labelStyle}>Line (optional)</div>
-            <input
-              value={line}
-              onChange={(e) => setLine(e.target.value)}
-              placeholder="Example: 44.5 or -3.5"
-              style={inputStyle}
-            />
-          </label>
+          <input
+            placeholder="Line"
+            value={line}
+            onChange={(e) => setLine(e.target.value)}
+            style={inputStyle}
+          />
 
-          <button type="submit" style={buttonStyle}>
-            Add Bet
-          </button>
-
-          {error && <div style={{ color: "crimson" }}>{error}</div>}
+          <button type="submit" style={buttonStyle}>Add Bet</button>
         </form>
       </div>
 
-      <div style={{ marginTop: 18 }}>
-        <h2 style={{ fontSize: 18, marginBottom: 8 }}>My bets</h2>
-
-        {bets.length === 0 ? (
-          <div style={{ opacity: 0.7 }}>No bets yet.</div>
-        ) : (
-          <ul style={{ paddingLeft: 18 }}>
-            {bets.map((b) => (
-              <li key={b.id} style={{ marginBottom: 6 }}>
-                {b.bet_type} — {b.selection} {b.line !== null ? `(${b.line})` : ""} — {b.game_id}
-              </li>
-            ))}
-          </ul>
-        )}
+      {/* Bets */}
+      <div style={{ marginTop: 24 }}>
+        <h2>My Bets</h2>
+        <ul>
+          {bets.map((b) => (
+            <li key={b.id}>
+              {b.bet_type} – {b.selection} {b.line !== null && `(${b.line})`} — game {b.game_id}
+            </li>
+          ))}
+        </ul>
       </div>
     </main>
   );
 }
 
+/* styles */
 const labelStyle: React.CSSProperties = {
   fontSize: 12,
   opacity: 0.7,
-  marginBottom: 6,
+  marginBottom: 4,
 };
 
 const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid #d6d6d6",
-  fontSize: 14,
-  outline: "none",
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid #ccc",
 };
 
 const buttonStyle: React.CSSProperties = {
-  padding: "12px 14px",
-  borderRadius: 12,
+  padding: "10px 12px",
+  borderRadius: 10,
   border: "1px solid #111",
   background: "#111",
   color: "white",
   fontWeight: 700,
+};
+
+const dropdownStyle: React.CSSProperties = {
+  position: "absolute",
+  top: "100%",
+  left: 0,
+  right: 0,
+  background: "white",
+  border: "1px solid #ccc",
+  borderRadius: 10,
+  zIndex: 10,
+  maxHeight: 260,
+  overflowY: "auto",
+};
+
+const rowStyle: React.CSSProperties = {
+  padding: 10,
   cursor: "pointer",
+  borderBottom: "1px solid #eee",
 };
