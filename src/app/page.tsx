@@ -133,28 +133,26 @@ export default function Page() {
       {error && <div style={{ color: "red" }}>{error}</div>}
 
       <ul>
-        {bets.map((b) => (
-          {bets.map((b) => {
-  const g = gamesById[b.game_id];
+  {bets.map((b) => {
+    const g = gamesById[b.game_id];
 
-  return (
-    <li key={b.id}>
-      {b.bet_type} – {b.selection} {b.line !== null && `(${b.line})`} — {b.game_id}
-      {g ? (
-        <>
-          {" "}
-          | {g.away_team} @ {g.home_team}: {g.away_score}-{g.home_score}{" "}
-          {g.is_final ? "(Final)" : `(Q${g.period ?? "?"} ${g.clock ?? ""})`}
-        </>
-      ) : (
-        " | (no game data)"
-      )}
-    </li>
-  );
-})}
+    return (
+      <li key={b.id}>
+        {b.bet_type} – {b.selection} {b.line !== null && `(${b.line})`} — {b.game_id}
+        {g ? (
+          <>
+            {" "}
+            | {g.away_team} @ {g.home_team}: {g.away_score}-{g.home_score}{" "}
+            {g.is_final ? "(Final)" : `(Q${g.period ?? "?"} ${g.clock ?? ""})`}
+          </>
+        ) : (
+          " | (no game data)"
+        )}
+      </li>
+    );
+  })}
+</ul>
 
-        ))}
-      </ul>
     </main>
   );
 }
