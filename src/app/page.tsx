@@ -90,3 +90,15 @@ export default function Page() {
     </main>
   );
 }
+const { error } = await supabase.from("bets").insert({
+  game_id: gameId,
+  bet_type: betType,
+  selection,
+  line: line ? Number(line) : null,
+});
+
+if (error) {
+  console.log("INSERT ERROR:", error);
+  alert(error.message);
+  return;
+}
