@@ -1,16 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
-
-// If you want per-user bets later, set this and keep user_id in your table.
-// You said you made user_id nullable, so this is optional.
-const USER_ID: string | null = null;
 
 type Bet = {
   id: string;
@@ -24,7 +20,7 @@ type Bet = {
 
 type GameSearchRow = {
   game_id: string;
-  date: string; // you likely store YYYY-MM-DD
+  date: string; // date or ISO string
   home_team: string;
   away_team: string;
   home_score: number | null;
@@ -35,16 +31,15 @@ type GameSearchRow = {
 };
 
 export default function Page() {
-  // Bets
   const [bets, setBets] = useState<Bet[]>([]);
 
-  // Bet form fields
+  // bet form
   const [gameId, setGameId] = useState("");
   const [betType, setBetType] = useState("total");
   const [selection, setSelection] = useState("over");
   const [line, setLine] = useState("");
 
-  // Game search (picker)
+  // game search (hits /api/nfl/search)
   const [gameSearch, setGameSearch] = useState("");
   const [searchResults, setSearchResults] = useState<GameSearchRow[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -55,10 +50,6 @@ export default function Page() {
   const searchBoxRef = useRef<HTMLDivElement | null>(null);
 
   async function loadBets() {
-    // If you later want per-user:
-    // let q = supabase.from("bets").select("*").order("created_at", { ascending: false });
-    // if (USER_ID) q = q.eq("user_id", USER_ID);
-
     const { data, error } = await supabase
       .from("bets")
       .select("*")
@@ -68,7 +59,6 @@ export default function Page() {
       setError(error.message);
       return;
     }
-
     setBets((data ?? []) as Bet[]);
   }
 
@@ -76,7 +66,7 @@ export default function Page() {
     loadBets();
   }, []);
 
-  // Close dropdown on outside click
+  // close dropdown when clicking outside
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!searchBoxRef.current) return;
@@ -88,10 +78,10 @@ export default function Page() {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
-  // Debounced search against your API route:
-  // GET /api/nfl/search?q=DAL
+  // debounced search via API
   useEffect(() => {
     const q = gameSearch.trim();
+
     if (q.length < 2) {
       setSearchResults([]);
       setSearchLoading(false);
@@ -102,12 +92,20 @@ export default function Page() {
 
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(q)}`);
+        const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(q)}`, {
+          cache: "no-store",
+        });
+
         const j = await r.json();
+        if (!r.ok) {
+          console.log("Search error:", j);
+          setSearchResults([]);
+          return;
+        }
+
         setSearchResults((j.games ?? []) as GameSearchRow[]);
         setSearchOpen(true);
       } catch (e: any) {
-        // don’t hard-fail the whole page if search fails
         console.log("Search failed:", e?.message ?? e);
         setSearchResults([]);
       } finally {
@@ -133,24 +131,19 @@ export default function Page() {
       return;
     }
 
-    const payload: any = {
+    const { error } = await supabase.from("bets").insert({
       game_id: gameId.trim(),
       bet_type: betType,
       selection: selection.trim(),
       line: parsedLine,
-    };
-
-    if (USER_ID) payload.user_id = USER_ID;
-
-    const { error } = await supabase.from("bets").insert(payload);
+    });
 
     if (error) {
-      console.log("INSERT ERROR:", error);
       setError(error.message);
       return;
     }
 
-    // reset
+    // reset form
     setGameId("");
     setGameSearch("");
     setLine("");
@@ -161,12 +154,6 @@ export default function Page() {
 
     await loadBets();
   }
-
-  const chosenGameLabel = useMemo(() => {
-    const found = searchResults.find((g) => g.game_id === gameId);
-    if (!found) return null;
-    return `${found.away_team} @ ${found.home_team} (${found.date})`;
-  }, [gameId, searchResults]);
 
   return (
     <main style={{ maxWidth: 980, margin: "0 auto", padding: 24, fontFamily: "system-ui" }}>
@@ -181,7 +168,10 @@ export default function Page() {
             <div style={labelStyle}>Game (search by team)</div>
             <input
               value={gameSearch}
-              onChange={(e) => setGameSearch(e.target.value)}
+              onChange={(e) => {
+                setGameSearch(e.target.value);
+                setSearchOpen(true);
+              }}
               onFocus={() => setSearchOpen(true)}
               placeholder="Type a team: DAL, Cowboys, Eagles..."
               style={inputStyle}
@@ -189,7 +179,6 @@ export default function Page() {
 
             <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
               Selected game_id: <b>{gameId || "—"}</b>
-              {chosenGameLabel ? <> • {chosenGameLabel}</> : null}
             </div>
 
             {searchOpen && (
@@ -205,14 +194,16 @@ export default function Page() {
                   background: "white",
                   boxShadow: "0 8px 30px rgba(0,0,0,0.08)",
                   overflow: "hidden",
+                  maxHeight: 300,
+                  overflowY: "auto",
                 }}
               >
                 {searchLoading ? (
                   <div style={{ padding: 12, opacity: 0.7 }}>Searching…</div>
+                ) : gameSearch.trim().length < 2 ? (
+                  <div style={{ padding: 12, opacity: 0.7 }}>Type at least 2 characters…</div>
                 ) : searchResults.length === 0 ? (
-                  <div style={{ padding: 12, opacity: 0.7 }}>
-                    Type at least 2 characters to search (this searches your Supabase <code>games</code> table).
-                  </div>
+                  <div style={{ padding: 12, opacity: 0.7 }}>No matches.</div>
                 ) : (
                   searchResults.map((g) => (
                     <div
@@ -233,7 +224,7 @@ export default function Page() {
                         <span style={{ fontWeight: 400, opacity: 0.7 }}> • {g.date}</span>
                       </div>
                       <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
-                        {g.away_score ?? 0}-{g.home_score ?? 0}{" "}
+                        {(g.away_score ?? 0)}-{(g.home_score ?? 0)}{" "}
                         {g.is_final ? "• Final" : g.period ? `• Q${g.period} ${g.clock ?? ""}` : ""}
                         <span style={{ opacity: 0.6 }}> • id: {g.game_id}</span>
                       </div>
