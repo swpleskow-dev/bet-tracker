@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -8,266 +8,247 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
+// If you want per-user bets later, set this and keep user_id in your table.
+// You said you made user_id nullable, so this is optional.
+const USER_ID: string | null = null;
+
 type Bet = {
   id: string;
+  created_at?: string;
+  user_id?: string | null;
   game_id: string;
   bet_type: string;
   selection: string;
   line: number | null;
 };
 
-type Game = {
+type GameSearchRow = {
   game_id: string;
-  game_date: string; // YYYY-MM-DD
+  date: string; // you likely store YYYY-MM-DD
   home_team: string;
   away_team: string;
-  home_score: number;
-  away_score: number;
+  home_score: number | null;
+  away_score: number | null;
+  is_final: boolean | null;
   period: number | null;
   clock: string | null;
-  is_final: boolean;
 };
-
-type WatchItem = {
-  id: string;
-  game_id: string;
-  note: string | null;
-  created_at: string;
-};
-
-function todayISO() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
 
 export default function Page() {
   // Bets
   const [bets, setBets] = useState<Bet[]>([]);
+
+  // Bet form fields
   const [gameId, setGameId] = useState("");
   const [betType, setBetType] = useState("total");
   const [selection, setSelection] = useState("over");
   const [line, setLine] = useState("");
+
+  // Game search (picker)
+  const [gameSearch, setGameSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<GameSearchRow[]>([]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
 
-  // Game search picker
-  const [gameSearch, setGameSearch] = useState("");
-  const [selectedGame, setSelectedGame] = useState<Game | null>(null);
-
-  // Games-by-date
-  const [date, setDate] = useState<string>(todayISO());
-  const [games, setGames] = useState<Game[]>([]);
-  const [gamesLoading, setGamesLoading] = useState(false);
-
-  // Watchlist
-  const [watchlist, setWatchlist] = useState<WatchItem[]>([]);
-  const [watchLoading, setWatchLoading] = useState(false);
+  const searchBoxRef = useRef<HTMLDivElement | null>(null);
 
   async function loadBets() {
-    const { data, error } = await supabase.from("bets").select("*").order("id", { ascending: false });
+    // If you later want per-user:
+    // let q = supabase.from("bets").select("*").order("created_at", { ascending: false });
+    // if (USER_ID) q = q.eq("user_id", USER_ID);
+
+    const { data, error } = await supabase
+      .from("bets")
+      .select("*")
+      .order("created_at", { ascending: false });
+
     if (error) {
       setError(error.message);
       return;
     }
+
     setBets((data ?? []) as Bet[]);
-  }
-
-  async function loadGames(selectedDate: string) {
-    setGamesLoading(true);
-    setError(null);
-    try {
-      const r = await fetch(`/api/nfl/games?date=${selectedDate}`, { cache: "no-store" });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j?.error ?? "Failed to load games");
-      setGames((j?.games ?? []) as Game[]);
-    } catch (e: any) {
-      setError(e.message);
-      setGames([]);
-    } finally {
-      setGamesLoading(false);
-    }
-  }
-
-  async function loadWatchlist() {
-    setWatchLoading(true);
-    setError(null);
-    try {
-      const r = await fetch(`/api/watchlist`, { cache: "no-store" });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j?.error ?? "Failed to load watchlist");
-      setWatchlist((j?.watchlist ?? []) as WatchItem[]);
-    } catch (e: any) {
-      setError(e.message);
-      setWatchlist([]);
-    } finally {
-      setWatchLoading(false);
-    }
   }
 
   useEffect(() => {
     loadBets();
-    loadGames(date);
-    loadWatchlist();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Close dropdown on outside click
   useEffect(() => {
-    loadGames(date);
+    function onDocClick(e: MouseEvent) {
+      if (!searchBoxRef.current) return;
+      if (!searchBoxRef.current.contains(e.target as Node)) {
+        setSearchOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
 
-    // Clear selection when switching date (prevents selecting a game from another day)
-    setSelectedGame(null);
-    setGameId("");
-    setGameSearch("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date]);
+  // Debounced search against your API route:
+  // GET /api/nfl/search?q=DAL
+  useEffect(() => {
+    const q = gameSearch.trim();
+    if (q.length < 2) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+
+    setSearchLoading(true);
+
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(q)}`);
+        const j = await r.json();
+        setSearchResults((j.games ?? []) as GameSearchRow[]);
+        setSearchOpen(true);
+      } catch (e: any) {
+        // don’t hard-fail the whole page if search fails
+        console.log("Search failed:", e?.message ?? e);
+        setSearchResults([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(t);
+  }, [gameSearch]);
 
   async function addBet(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
-    if (!gameId) {
-      setError("Please select a game.");
+    if (!gameId.trim()) {
+      setError("Pick a game first (click a search result).");
       return;
     }
 
-    const { error } = await supabase.from("bets").insert({
-      game_id: gameId,
+    const parsedLine = line.trim() === "" ? null : Number(line);
+    if (line.trim() !== "" && Number.isNaN(parsedLine)) {
+      setError("Line must be a number (or leave blank).");
+      return;
+    }
+
+    const payload: any = {
+      game_id: gameId.trim(),
       bet_type: betType,
-      selection,
-      line: line ? Number(line) : null,
-    });
+      selection: selection.trim(),
+      line: parsedLine,
+    };
+
+    if (USER_ID) payload.user_id = USER_ID;
+
+    const { error } = await supabase.from("bets").insert(payload);
 
     if (error) {
+      console.log("INSERT ERROR:", error);
       setError(error.message);
       return;
     }
 
-    // reset form
-    setBetType("total");
-    setSelection("over");
-    setLine("");
-    setSelectedGame(null);
+    // reset
     setGameId("");
     setGameSearch("");
+    setLine("");
+    setSelection("over");
+    setBetType("total");
+    setSearchResults([]);
+    setSearchOpen(false);
 
     await loadBets();
   }
 
-  const watchedIds = useMemo(() => new Set(watchlist.map((w) => w.game_id)), [watchlist]);
-
-  async function watchGame(game_id: string) {
-    setError(null);
-    const r = await fetch(`/api/watchlist`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ game_id }),
-    });
-    const j = await r.json();
-    if (!r.ok) {
-      setError(j?.error ?? "Failed to watch game");
-      return;
-    }
-    await loadWatchlist();
-  }
-
-  async function unwatchGame(game_id: string) {
-    setError(null);
-    const r = await fetch(`/api/watchlist?game_id=${encodeURIComponent(game_id)}`, { method: "DELETE" });
-    const j = await r.json();
-    if (!r.ok) {
-      setError(j?.error ?? "Failed to unwatch game");
-      return;
-    }
-    await loadWatchlist();
-  }
-
-  const filteredGames = useMemo(() => {
-    const q = gameSearch.trim().toLowerCase();
-    if (!q) return [];
-    return games
-      .filter((g) => g.home_team.toLowerCase().includes(q) || g.away_team.toLowerCase().includes(q))
-      .slice(0, 20);
-  }, [games, gameSearch]);
+  const chosenGameLabel = useMemo(() => {
+    const found = searchResults.find((g) => g.game_id === gameId);
+    if (!found) return null;
+    return `${found.away_team} @ ${found.home_team} (${found.date})`;
+  }, [gameId, searchResults]);
 
   return (
     <main style={{ maxWidth: 980, margin: "0 auto", padding: 24, fontFamily: "system-ui" }}>
       <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0 }}>Bet Tracker</h1>
 
-      {error && <div style={{ color: "crimson", marginTop: 10 }}>{error}</div>}
-
-      {/* Add bet */}
-      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16, marginTop: 16 }}>
+      <div style={{ marginTop: 16, border: "1px solid #e5e5e5", borderRadius: 12, padding: 16 }}>
         <h2 style={{ margin: 0, fontSize: 18 }}>Add a bet</h2>
 
-        <form onSubmit={addBet} style={{ display: "grid", gap: 10, marginTop: 12 }}>
-          {/* Search + select game */}
-          <div style={{ position: "relative" }}>
-            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Game (search by team)</div>
+        <form onSubmit={addBet} style={{ display: "grid", gap: 12, marginTop: 12 }}>
+          {/* Game search */}
+          <div ref={searchBoxRef} style={{ position: "relative" }}>
+            <div style={labelStyle}>Game (search by team)</div>
             <input
-              placeholder="Type: KC, BUF, Eagles..."
               value={gameSearch}
               onChange={(e) => setGameSearch(e.target.value)}
-              style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #ccc" }}
+              onFocus={() => setSearchOpen(true)}
+              placeholder="Type a team: DAL, Cowboys, Eagles..."
+              style={inputStyle}
             />
 
-            {!!filteredGames.length && (
+            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
+              Selected game_id: <b>{gameId || "—"}</b>
+              {chosenGameLabel ? <> • {chosenGameLabel}</> : null}
+            </div>
+
+            {searchOpen && (
               <div
                 style={{
                   position: "absolute",
-                  top: "100%",
+                  top: 76,
                   left: 0,
                   right: 0,
+                  zIndex: 20,
+                  border: "1px solid #e5e5e5",
+                  borderRadius: 12,
                   background: "white",
-                  border: "1px solid #ccc",
-                  borderRadius: 10,
-                  marginTop: 6,
-                  zIndex: 10,
-                  maxHeight: 240,
-                  overflowY: "auto",
+                  boxShadow: "0 8px 30px rgba(0,0,0,0.08)",
+                  overflow: "hidden",
                 }}
               >
-                {filteredGames.map((g) => (
-                  <div
-                    key={g.game_id}
-                    style={{ padding: 10, cursor: "pointer", borderBottom: "1px solid #eee" }}
-                    onClick={() => {
-                      setSelectedGame(g);
-                      setGameId(g.game_id);
-                      setGameSearch(`${g.away_team} @ ${g.home_team}`);
-                    }}
-                  >
-                    <b>
-                      {g.away_team} @ {g.home_team}
-                    </b>{" "}
-                    — {g.away_score}-{g.home_score}{" "}
-                    {g.is_final ? "(Final)" : `(Q${g.period ?? "?"} ${g.clock ?? ""})`}{" "}
-                    <span style={{ opacity: 0.6 }}>id: {g.game_id}</span>
+                {searchLoading ? (
+                  <div style={{ padding: 12, opacity: 0.7 }}>Searching…</div>
+                ) : searchResults.length === 0 ? (
+                  <div style={{ padding: 12, opacity: 0.7 }}>
+                    Type at least 2 characters to search (this searches your Supabase <code>games</code> table).
                   </div>
-                ))}
+                ) : (
+                  searchResults.map((g) => (
+                    <div
+                      key={g.game_id}
+                      onClick={() => {
+                        setGameId(g.game_id);
+                        setGameSearch(`${g.away_team} @ ${g.home_team} (${g.date})`);
+                        setSearchOpen(false);
+                      }}
+                      style={{
+                        padding: 12,
+                        cursor: "pointer",
+                        borderBottom: "1px solid #f3f3f3",
+                      }}
+                    >
+                      <div style={{ fontWeight: 700 }}>
+                        {g.away_team} @ {g.home_team}
+                        <span style={{ fontWeight: 400, opacity: 0.7 }}> • {g.date}</span>
+                      </div>
+                      <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
+                        {g.away_score ?? 0}-{g.home_score ?? 0}{" "}
+                        {g.is_final ? "• Final" : g.period ? `• Q${g.period} ${g.clock ?? ""}` : ""}
+                        <span style={{ opacity: 0.6 }}> • id: {g.game_id}</span>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             )}
           </div>
 
-          {selectedGame && (
-            <div style={{ fontSize: 13, opacity: 0.85 }}>
-              Selected:{" "}
-              <b>
-                {selectedGame.away_team} @ {selectedGame.home_team}
-              </b>{" "}
-              <span style={{ opacity: 0.7 }}>(id: {selectedGame.game_id})</span>
-            </div>
-          )}
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          {/* Bet fields */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <label>
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Bet type</div>
-              <select
-                value={betType}
-                onChange={(e) => setBetType(e.target.value)}
-                style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #ccc" }}
-              >
+              <div style={labelStyle}>Bet type</div>
+              <select value={betType} onChange={(e) => setBetType(e.target.value)} style={inputStyle}>
                 <option value="moneyline">moneyline</option>
                 <option value="spread">spread</option>
                 <option value="total">total</option>
@@ -275,117 +256,45 @@ export default function Page() {
             </label>
 
             <label>
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Selection</div>
+              <div style={labelStyle}>Selection</div>
               <input
-                placeholder='e.g. "KC" or "over"'
                 value={selection}
                 onChange={(e) => setSelection(e.target.value)}
-                style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #ccc" }}
+                placeholder='over / under or team (ex: KC)'
+                style={inputStyle}
                 required
               />
             </label>
           </div>
 
           <label>
-            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Line (spread/total)</div>
+            <div style={labelStyle}>Line (optional)</div>
             <input
-              placeholder="e.g. -3.5 or 44.5"
               value={line}
               onChange={(e) => setLine(e.target.value)}
-              disabled={betType === "moneyline"}
-              style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #ccc" }}
+              placeholder="Example: 44.5 or -3.5"
+              style={inputStyle}
             />
           </label>
 
-          <button
-            type="submit"
-            style={{
-              padding: "10px 12px",
-              borderRadius: 10,
-              border: "1px solid #111",
-              background: "#111",
-              color: "white",
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
-          >
+          <button type="submit" style={buttonStyle}>
             Add Bet
           </button>
+
+          {error && <div style={{ color: "crimson" }}>{error}</div>}
         </form>
       </div>
 
-      {/* Bets list */}
       <div style={{ marginTop: 18 }}>
-        <h2 style={{ fontSize: 18 }}>My Bets</h2>
+        <h2 style={{ fontSize: 18, marginBottom: 8 }}>My bets</h2>
+
         {bets.length === 0 ? (
           <div style={{ opacity: 0.7 }}>No bets yet.</div>
         ) : (
-          <ul>
-            {bets.map((b) => (
-              <li key={b.id}>
-                {b.bet_type} – {b.selection} {b.line !== null && `(${b.line})`} — {b.game_id}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      {/* Games by date */}
-      <div style={{ marginTop: 18 }}>
-        <h2 style={{ fontSize: 18 }}>NFL Games</h2>
-
-        <label style={{ display: "block", marginBottom: 10 }}>
-          Date:{" "}
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        </label>
-
-        {gamesLoading ? (
-          <div>Loading games…</div>
-        ) : games.length === 0 ? (
-          <div style={{ opacity: 0.7 }}>No games found for {date}.</div>
-        ) : (
           <ul style={{ paddingLeft: 18 }}>
-            {games.map((g) => {
-              const isWatched = watchedIds.has(g.game_id);
-              return (
-                <li key={g.game_id} style={{ marginBottom: 8 }}>
-                  <b>
-                    {g.away_team} @ {g.home_team}
-                  </b>{" "}
-                  — {g.away_score}-{g.home_score}{" "}
-                  {g.is_final ? "(Final)" : `(Q${g.period ?? "?"} ${g.clock ?? ""})`}{" "}
-                  <span style={{ opacity: 0.7 }}>— id: {g.game_id}</span>{" "}
-                  {isWatched ? (
-                    <button onClick={() => unwatchGame(g.game_id)} style={{ marginLeft: 8 }}>
-                      Unwatch
-                    </button>
-                  ) : (
-                    <button onClick={() => watchGame(g.game_id)} style={{ marginLeft: 8 }}>
-                      Watch
-                    </button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-
-      {/* Watchlist */}
-      <div style={{ marginTop: 18 }}>
-        <h2 style={{ fontSize: 18 }}>Watchlist</h2>
-        {watchLoading ? (
-          <div>Loading watchlist…</div>
-        ) : watchlist.length === 0 ? (
-          <div style={{ opacity: 0.7 }}>No watched games yet.</div>
-        ) : (
-          <ul>
-            {watchlist.map((w) => (
-              <li key={w.id}>
-                {w.game_id}{" "}
-                <button onClick={() => unwatchGame(w.game_id)} style={{ marginLeft: 8 }}>
-                  Unwatch
-                </button>
+            {bets.map((b) => (
+              <li key={b.id} style={{ marginBottom: 6 }}>
+                {b.bet_type} — {b.selection} {b.line !== null ? `(${b.line})` : ""} — {b.game_id}
               </li>
             ))}
           </ul>
@@ -394,3 +303,28 @@ export default function Page() {
     </main>
   );
 }
+
+const labelStyle: React.CSSProperties = {
+  fontSize: 12,
+  opacity: 0.7,
+  marginBottom: 6,
+};
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid #d6d6d6",
+  fontSize: 14,
+  outline: "none",
+};
+
+const buttonStyle: React.CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid #111",
+  background: "#111",
+  color: "white",
+  fontWeight: 700,
+  cursor: "pointer",
+};
