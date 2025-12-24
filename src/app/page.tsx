@@ -1,59 +1,48 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-// import { supabaseBrowser as supabase } from "@/lib/supabaseClient";
-// import type { BetRow, GameRow } from "@/lib/evaluateBet";
-// import { evaluateBet } from "@/lib/evaluateBet";
+import { supabaseBrowser } from "@/lib/supabaseClient";
 
+type BetRow = {
+  id: string;
+  user_id: string;
+  sport: string;
+  game_id: string;
+  bet_type: string;
+  selection: string;
+  line: number | null;
+  created_at: string;
+};
 
 const USER_ID = "demo-user";
 
 export default function Page() {
+  const supabase = supabaseBrowser();
+
   const [bets, setBets] = useState<BetRow[]>([]);
-  const [gamesById, setGamesById] = useState<Record<string, GameRow>>({});
   const [gameId, setGameId] = useState("");
-  const [betType, setBetType] = useState<BetRow["bet_type"]>("total");
+  const [betType, setBetType] = useState("total");
   const [selection, setSelection] = useState("over");
   const [line, setLine] = useState("44.5");
   const [error, setError] = useState<string | null>(null);
 
-  async function loadAll() {
-    // 1) load bets
-    const { data: betData, error: betErr } = await supabase
+  async function loadBets() {
+    const { data, error } = await supabase
       .from("bets")
       .select("*")
       .eq("user_id", USER_ID)
       .order("created_at", { ascending: false });
 
-    if (betErr) throw betErr;
-
-    const betRows = (betData ?? []) as BetRow[];
-    setBets(betRows);
-
-    // 2) load matching games
-    const ids = Array.from(new Set(betRows.map((b) => b.game_id).filter(Boolean)));
-    if (ids.length === 0) {
-      setGamesById({});
+    if (error) {
+      setError(error.message);
       return;
     }
 
-    const { data: gameData, error: gameErr } = await supabase
-      .from("games")
-      .select("*")
-      .in("game_id", ids);
-
-    if (gameErr) throw gameErr;
-
-    const map: Record<string, GameRow> = {};
-    for (const g of (gameData ?? []) as GameRow[]) map[g.game_id] = g;
-    setGamesById(map);
+    setBets((data ?? []) as BetRow[]);
   }
 
   useEffect(() => {
-    loadAll().catch((e) => setError(e.message));
-    // Refresh periodically so UI reflects new cron updates
-    const t = setInterval(() => loadAll().catch(() => {}), 30_000);
-    return () => clearInterval(t);
+    loadBets();
   }, []);
 
   async function addBet(e: React.FormEvent) {
@@ -62,16 +51,16 @@ export default function Page() {
 
     const parsedLine = betType === "moneyline" ? null : Number(line);
     if (betType !== "moneyline" && Number.isNaN(parsedLine)) {
-      setError("Line must be a number.");
+      setError("Line must be a number");
       return;
     }
 
     const { error } = await supabase.from("bets").insert({
       user_id: USER_ID,
       sport: "NFL",
-      game_id: gameId.trim(),
+      game_id: gameId,
       bet_type: betType,
-      selection: selection.trim(),
+      selection,
       line: parsedLine,
     });
 
@@ -81,178 +70,60 @@ export default function Page() {
     }
 
     setGameId("");
-    await loadAll();
+    loadBets();
   }
 
   return (
-    <main style={{ maxWidth: 980, margin: "0 auto", padding: 24, fontFamily: "system-ui" }}>
+    <main style={{ maxWidth: 800, margin: "0 auto", padding: 24 }}>
       <h1 style={{ fontSize: 28, fontWeight: 800 }}>Bet Tracker</h1>
-      <div style={{ opacity: 0.8, marginTop: 4 }}>
-        Live status updates about every 30 seconds.
-      </div>
 
-      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16, marginTop: 16 }}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>Add a bet</h2>
+      <form onSubmit={addBet} style={{ marginTop: 16, display: "grid", gap: 10 }}>
+        <input
+          placeholder="Game ID"
+          value={gameId}
+          onChange={(e) => setGameId(e.target.value)}
+          required
+        />
 
-        <form onSubmit={addBet} style={{ display: "grid", gap: 10, marginTop: 12 }}>
-          <label>
-            <div style={labelStyle}>Game ID (ESPN event id)</div>
-            <input
-              value={gameId}
-              onChange={(e) => setGameId(e.target.value)}
-              placeholder="Example: 401671789"
-              style={inputStyle}
-              required
-            />
-          </label>
+        <select value={betType} onChange={(e) => setBetType(e.target.value)}>
+          <option value="moneyline">moneyline</option>
+          <option value="spread">spread</option>
+          <option value="total">total</option>
+        </select>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <label>
-              <div style={labelStyle}>Bet type</div>
-              <select value={betType} onChange={(e) => setBetType(e.target.value as any)} style={inputStyle}>
-                <option value="moneyline">moneyline</option>
-                <option value="spread">spread</option>
-                <option value="total">total</option>
-              </select>
-            </label>
+        <input
+          placeholder="Selection (KC / over / under)"
+          value={selection}
+          onChange={(e) => setSelection(e.target.value)}
+          required
+        />
 
-            <label>
-              <div style={labelStyle}>Selection</div>
-              <input
-                value={selection}
-                onChange={(e) => setSelection(e.target.value)}
-                placeholder='moneyline/spread: "KC" | total: "over"'
-                style={inputStyle}
-                required
-              />
-            </label>
-          </div>
+        <input
+          placeholder="Line"
+          value={line}
+          onChange={(e) => setLine(e.target.value)}
+          disabled={betType === "moneyline"}
+        />
 
-          <label>
-            <div style={labelStyle}>Line (spread/total only)</div>
-            <input
-              value={line}
-              onChange={(e) => setLine(e.target.value)}
-              placeholder="Example: -3.5 or 44.5"
-              style={inputStyle}
-              disabled={betType === "moneyline"}
-            />
-          </label>
+        <button type="submit">Add Bet</button>
 
-          <button style={buttonStyle} type="submit">
-            Add bet
-          </button>
+        {error && <div style={{ color: "red" }}>{error}</div>}
+      </form>
 
-          {error && <div style={{ color: "crimson" }}>{error}</div>}
-        </form>
-      </div>
+      <h2 style={{ marginTop: 24 }}>My Bets</h2>
 
-      <div style={{ marginTop: 18 }}>
-        <h2 style={{ fontSize: 18 }}>My bets</h2>
-
-        {bets.length === 0 ? (
-          <div style={{ opacity: 0.7 }}>No bets yet.</div>
-        ) : (
-          <div style={{ display: "grid", gap: 10 }}>
-            {bets.map((b) => {
-              const g = gamesById[b.game_id];
-              const evalResult = evaluateBet(b, g);
-
-              return (
-                <div key={b.id} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                    <div style={{ fontWeight: 800 }}>
-                      {b.bet_type.toUpperCase()} — {b.selection}{" "}
-                      {b.line !== null ? `(${b.line})` : ""}
-                    </div>
-
-                    <StatusPill label={evalResult.label} tone={evalResult.tone} />
-                  </div>
-
-                  <div style={{ marginTop: 6, opacity: 0.85, fontSize: 13 }}>
-                    game_id: {b.game_id}
-                    {g ? (
-                      <>
-                        {" "}
-                        • {g.away_team} @ {g.home_team} •{" "}
-                        <b>
-                          {g.away_score}–{g.home_score}
-                        </b>{" "}
-                        {g.is_final ? (
-                          <>• Final</>
-                        ) : (
-                          <>
-                            • Q{g.period ?? "?"} {g.clock ?? ""}
-                          </>
-                        )}
-                      </>
-                    ) : (
-                      <> • (no game row yet)</>
-                    )}
-                  </div>
-
-                  {evalResult.margin !== null && (
-                    <div style={{ marginTop: 8, fontSize: 13 }}>
-                      Margin: <b>{formatMargin(evalResult.margin)}</b>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      {bets.length === 0 ? (
+        <div>No bets yet.</div>
+      ) : (
+        <ul>
+          {bets.map((b) => (
+            <li key={b.id}>
+              {b.bet_type} – {b.selection} {b.line !== null && `(${b.line})`} —{" "}
+              {b.game_id}
+            </li>
+          ))}
+        </ul>
+      )}
     </main>
   );
 }
-
-function StatusPill({
-  label,
-  tone,
-}: {
-  label: string;
-  tone: "good" | "bad" | "neutral";
-}) {
-  const style: React.CSSProperties = {
-    padding: "4px 10px",
-    borderRadius: 999,
-    fontSize: 12,
-    fontWeight: 800,
-    border: "1px solid #ddd",
-    background:
-      tone === "good" ? "#e9f7ef" : tone === "bad" ? "#fdecec" : "#f4f4f5",
-    color: "#111",
-    whiteSpace: "nowrap",
-  };
-
-  return <span style={style}>{label}</span>;
-}
-
-function formatMargin(n: number) {
-  const rounded = Math.round(n * 10) / 10;
-  return (rounded > 0 ? "+" : "") + String(rounded);
-}
-
-const labelStyle: React.CSSProperties = {
-  fontSize: 12,
-  opacity: 0.7,
-  marginBottom: 4,
-};
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "1px solid #ccc",
-  fontSize: 14,
-};
-
-const buttonStyle: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "1px solid #111",
-  background: "#111",
-  color: "white",
-  fontWeight: 700,
-  cursor: "pointer",
-};
