@@ -21,6 +21,10 @@ type Bet = {
   selection: string;
   line: number | null;
   created_at: string;
+
+  // NEW: tracking money
+  stake: number; // amount risked
+  odds: number; // American odds (-110, +150, etc.)
 };
 
 type GameRow = {
@@ -50,7 +54,6 @@ function calcResult(b: Bet, g?: GameRow) {
   const hs = g.home_score ?? 0;
   const as = g.away_score ?? 0;
 
-  // if not final, treat as pending
   if (!g.is_final) return { label: "Pending", tone: "neutral" as const };
 
   const away = g.away_team;
@@ -80,9 +83,7 @@ function calcResult(b: Bet, g?: GameRow) {
     const diffFromPick = pickedHome ? (hs - as) + line : (as - hs) + line;
 
     if (diffFromPick === 0) return { label: "Push", tone: "neutral" as const };
-    return diffFromPick > 0
-      ? { label: "Won", tone: "good" as const }
-      : { label: "Lost", tone: "bad" as const };
+    return diffFromPick > 0 ? { label: "Won", tone: "good" as const } : { label: "Lost", tone: "bad" as const };
   }
 
   // moneyline
@@ -117,6 +118,25 @@ function Pill({ text, tone }: { text: string; tone: "good" | "bad" | "neutral" }
   );
 }
 
+function profitFromAmericanOdds(stake: number, odds: number) {
+  if (!Number.isFinite(stake) || stake <= 0) return 0;
+  if (!Number.isFinite(odds) || odds === 0) return 0;
+
+  // profit only (not including returned stake)
+  if (odds > 0) return stake * (odds / 100);
+  return stake * (100 / Math.abs(odds));
+}
+
+function betProfit(b: Bet, g?: GameRow) {
+  const r = calcResult(b, g);
+  const stake = Number(b.stake ?? 0);
+  const odds = Number(b.odds ?? 0);
+
+  if (r.label === "Won") return profitFromAmericanOdds(stake, odds);
+  if (r.label === "Lost") return -stake;
+  return 0; // Pending / Push / No game data
+}
+
 export default function Page() {
   const [bets, setBets] = useState<Bet[]>([]);
   const [gamesById, setGamesById] = useState<Record<string, GameRow>>({});
@@ -127,6 +147,10 @@ export default function Page() {
   const [betType, setBetType] = useState<BetType>("total");
   const [selection, setSelection] = useState<string>("over");
   const [line, setLine] = useState<string>("");
+
+  // NEW: stake + odds
+  const [stake, setStake] = useState<string>("1");
+  const [odds, setOdds] = useState<string>("-110");
 
   // game search
   const [gameSearch, setGameSearch] = useState("");
@@ -177,7 +201,6 @@ export default function Page() {
 
   useEffect(() => {
     loadAll();
-    // refresh so results/status update
     const t = setInterval(loadAll, 30_000);
     return () => clearInterval(t);
   }, []);
@@ -246,6 +269,13 @@ export default function Page() {
       if (!line.trim() || Number.isNaN(parsed)) return setError("Line must be a number for spread/total.");
     }
 
+    const stakeNum = Number(stake);
+    const oddsNum = Number(odds);
+
+    if (!stake.trim() || Number.isNaN(stakeNum) || stakeNum <= 0) return setError("Stake must be a positive number.");
+    if (!odds.trim() || Number.isNaN(oddsNum) || oddsNum === 0)
+      return setError("Odds must be a non-zero number (e.g. -110, +150).");
+
     const { error } = await supabase.from("bets").insert({
       user_id: USER_ID,
       sport: "NFL",
@@ -253,13 +283,19 @@ export default function Page() {
       bet_type: betType,
       selection,
       line: betType === "moneyline" ? null : Number(line),
+
+      stake: stakeNum,
+      odds: oddsNum,
     });
 
     if (error) return setError(error.message);
 
+    // reset
     setLine("");
     setBetType("total");
     setSelection("over");
+    setStake("1");
+    setOdds("-110");
 
     await loadAll();
   }
@@ -267,13 +303,16 @@ export default function Page() {
   async function deleteBet(betId: string) {
     setError(null);
 
-    const { error } = await supabase
+    // select("id") makes it easy to detect "no row deleted"
+    const { data, error } = await supabase
       .from("bets")
       .delete()
       .eq("id", betId)
-      .eq("user_id", USER_ID);
+      .eq("user_id", USER_ID)
+      .select("id");
 
-    if (error) return setError(error.message);
+    if (error) return setError(`Delete failed: ${error.message}`);
+    if (!data || data.length === 0) return setError("Delete did nothing (no row matched, or blocked by RLS).");
 
     setBets((prev) => prev.filter((b) => b.id !== betId));
     await loadAll();
@@ -301,6 +340,33 @@ export default function Page() {
         )}
       </select>
     );
+
+  // ---- Summary ----
+  const summary = bets.reduce(
+    (acc, b) => {
+      const g = gamesById[b.game_id];
+      const r = calcResult(b, g);
+
+      if (r.label === "Won") {
+        const p = profitFromAmericanOdds(Number(b.stake ?? 0), Number(b.odds ?? 0));
+        acc.wins += 1;
+        acc.totalWinnings += p;
+        acc.net += p;
+      } else if (r.label === "Lost") {
+        const s = Number(b.stake ?? 0);
+        acc.losses += 1;
+        acc.totalLosses += s;
+        acc.net -= s;
+      } else if (r.label === "Push") {
+        acc.pushes += 1;
+      } else if (r.label === "Pending") {
+        acc.pending += 1;
+      }
+
+      return acc;
+    },
+    { wins: 0, losses: 0, pushes: 0, pending: 0, totalWinnings: 0, totalLosses: 0, net: 0 }
+  );
 
   return (
     <main style={{ maxWidth: 900, margin: "0 auto", padding: 24, fontFamily: "system-ui" }}>
@@ -394,10 +460,60 @@ export default function Page() {
             />
           </div>
 
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={labelStyle}>Stake ($ risk)</label>
+              <input
+                value={stake}
+                onChange={(e) => setStake(e.target.value)}
+                style={inputStyle}
+                placeholder="e.g. 50"
+                inputMode="decimal"
+              />
+            </div>
+
+            <div>
+              <label style={labelStyle}>Odds (American)</label>
+              <input
+                value={odds}
+                onChange={(e) => setOdds(e.target.value)}
+                style={inputStyle}
+                placeholder="e.g. -110 or +150"
+                inputMode="numeric"
+              />
+            </div>
+          </div>
+
           <button type="submit" style={buttonStyle}>
             Add Bet
           </button>
         </form>
+      </div>
+
+      <div style={{ marginTop: 16, border: "1px solid #ddd", borderRadius: 12, padding: 16 }}>
+        <div style={{ fontWeight: 900, marginBottom: 8 }}>Summary</div>
+
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "baseline" }}>
+          <div>
+            <b>Record:</b> {summary.wins}-{summary.losses}-{summary.pushes}{" "}
+            <span style={{ opacity: 0.7 }}>(Pending: {summary.pending})</span>
+          </div>
+
+          <div>
+            <b>Total Winnings:</b> ${summary.totalWinnings.toFixed(2)}
+          </div>
+
+          <div>
+            <b>Total Losses:</b> ${summary.totalLosses.toFixed(2)}
+          </div>
+
+          <div>
+            <b>Net:</b>{" "}
+            <span style={{ fontWeight: 900 }}>
+              {summary.net >= 0 ? "+" : "-"}${Math.abs(summary.net).toFixed(2)}
+            </span>
+          </div>
+        </div>
       </div>
 
       <div style={{ marginTop: 24 }}>
@@ -410,6 +526,7 @@ export default function Page() {
             {bets.map((b) => {
               const g = gamesById[b.game_id];
               const r = calcResult(b, g);
+              const profit = betProfit(b, g);
 
               const gameLabel = g
                 ? `${g.away_team} @ ${g.home_team} — ${g.game_date} • ${g.away_score ?? 0}-${g.home_score ?? 0} • ${statusText(
@@ -450,6 +567,13 @@ export default function Page() {
                   </div>
 
                   <div style={{ marginTop: 6, opacity: 0.85, fontSize: 13 }}>{gameLabel}</div>
+
+                  <div style={{ marginTop: 6, fontSize: 13, opacity: 0.9 }}>
+                    Stake: ${Number(b.stake ?? 0).toFixed(2)} • Odds: {b.odds ?? 0} • Profit:{" "}
+                    <span style={{ fontWeight: 800 }}>
+                      {profit >= 0 ? "+" : "-"}${Math.abs(profit).toFixed(2)}
+                    </span>
+                  </div>
                 </div>
               );
             })}
