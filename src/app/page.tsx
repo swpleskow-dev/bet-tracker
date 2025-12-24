@@ -177,12 +177,55 @@ export default function Page() {
       <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 16, marginTop: 16 }}>
         <h2 style={{ margin: 0, fontSize: 18 }}>Add a bet</h2>
         <form onSubmit={addBet} style={{ display: "grid", gap: 10, marginTop: 12 }}>
-          <input
-            placeholder="Game ID (ESPN event id)"
-            value={gameId}
-            onChange={(e) => setGameId(e.target.value)}
-            required
-          />
+          <div style={{ position: "relative" }}>
+  <input
+    placeholder="Search game (team name)"
+    value={gameSearch}
+    onChange={(e) => setGameSearch(e.target.value)}
+  />
+
+  {gameSearch && (
+    <div
+      style={{
+        position: "absolute",
+        top: "100%",
+        left: 0,
+        right: 0,
+        background: "white",
+        border: "1px solid #ccc",
+        zIndex: 10,
+        maxHeight: 200,
+        overflowY: "auto",
+      }}
+    >
+      {games
+        .filter((g) => {
+          const q = gameSearch.toLowerCase();
+          return (
+            g.home_team.toLowerCase().includes(q) ||
+            g.away_team.toLowerCase().includes(q)
+          );
+        })
+        .map((g) => (
+          <div
+            key={g.game_id}
+            style={{ padding: 8, cursor: "pointer" }}
+            onClick={() => {
+              setSelectedGame(g);
+              setGameId(g.game_id);
+              setGameSearch(`${g.away_team} @ ${g.home_team}`);
+            }}
+          >
+            {g.away_team} @ {g.home_team}{" "}
+            {g.is_final
+              ? `(Final ${g.away_score}-${g.home_score})`
+              : `(${g.away_score}-${g.home_score})`}
+          </div>
+        ))}
+    </div>
+  )}
+</div>
+
 
           <select value={betType} onChange={(e) => setBetType(e.target.value)}>
             <option value="moneyline">moneyline</option>
