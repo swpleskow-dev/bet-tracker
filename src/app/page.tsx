@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -77,11 +77,12 @@ function calcResult(b: Bet, g?: GameRow) {
     const pickedHome = pick === home;
     if (!pickedAway && !pickedHome) return { label: "Pending", tone: "neutral" as const };
 
-    const diffFromPick =
-      pickedHome ? (hs - as) + line : (as - hs) + line;
+    const diffFromPick = pickedHome ? (hs - as) + line : (as - hs) + line;
 
     if (diffFromPick === 0) return { label: "Push", tone: "neutral" as const };
-    return diffFromPick > 0 ? { label: "Won", tone: "good" as const } : { label: "Lost", tone: "bad" as const };
+    return diffFromPick > 0
+      ? { label: "Won", tone: "good" as const }
+      : { label: "Lost", tone: "bad" as const };
   }
 
   // moneyline
@@ -90,18 +91,14 @@ function calcResult(b: Bet, g?: GameRow) {
   const pickedHome = pick === home;
   if (!pickedAway && !pickedHome) return { label: "Pending", tone: "neutral" as const };
 
-  const won =
-    pickedHome ? hs > as :
-    pickedAway ? as > hs :
-    false;
+  const won = pickedHome ? hs > as : pickedAway ? as > hs : false;
 
   if (hs === as) return { label: "Push", tone: "neutral" as const };
   return won ? { label: "Won", tone: "good" as const } : { label: "Lost", tone: "bad" as const };
 }
 
 function Pill({ text, tone }: { text: string; tone: "good" | "bad" | "neutral" }) {
-  const bg =
-    tone === "good" ? "#e9f7ef" : tone === "bad" ? "#fdecec" : "#f4f4f5";
+  const bg = tone === "good" ? "#e9f7ef" : tone === "bad" ? "#fdecec" : "#f4f4f5";
   return (
     <span
       style={{
@@ -267,6 +264,21 @@ export default function Page() {
     await loadAll();
   }
 
+  async function deleteBet(betId: string) {
+    setError(null);
+
+    const { error } = await supabase
+      .from("bets")
+      .delete()
+      .eq("id", betId)
+      .eq("user_id", USER_ID);
+
+    if (error) return setError(error.message);
+
+    setBets((prev) => prev.filter((b) => b.id !== betId));
+    await loadAll();
+  }
+
   const selectionUI =
     betType === "total" ? (
       <select value={selection} onChange={(e) => setSelection(e.target.value)} style={inputStyle}>
@@ -400,16 +412,41 @@ export default function Page() {
               const r = calcResult(b, g);
 
               const gameLabel = g
-                ? `${g.away_team} @ ${g.home_team} — ${g.game_date} • ${g.away_score ?? 0}-${g.home_score ?? 0} • ${statusText(g)}`
+                ? `${g.away_team} @ ${g.home_team} — ${g.game_date} • ${g.away_score ?? 0}-${g.home_score ?? 0} • ${statusText(
+                    g
+                  )}`
                 : b.game_id;
 
               return (
                 <div key={b.id} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    <Pill text={r.label} tone={r.tone} />
-                    <div style={{ fontWeight: 800 }}>
-                      {b.bet_type} — {b.selection} {b.line !== null ? `(${b.line})` : ""}
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 10,
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <Pill text={r.label} tone={r.tone} />
+                      <div style={{ fontWeight: 800 }}>
+                        {b.bet_type} — {b.selection} {b.line !== null ? `(${b.line})` : ""}
+                      </div>
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const ok = confirm("Delete this bet?");
+                        if (ok) deleteBet(b.id);
+                      }}
+                      style={deleteButtonStyle}
+                      aria-label="Delete bet"
+                      title="Delete bet"
+                    >
+                      Delete
+                    </button>
                   </div>
 
                   <div style={{ marginTop: 6, opacity: 0.85, fontSize: 13 }}>{gameLabel}</div>
@@ -443,6 +480,15 @@ const buttonStyle: React.CSSProperties = {
   border: "1px solid #111",
   background: "#111",
   color: "white",
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const deleteButtonStyle: React.CSSProperties = {
+  padding: "6px 10px",
+  borderRadius: 10,
+  border: "1px solid #ccc",
+  background: "white",
   fontWeight: 700,
   cursor: "pointer",
 };
