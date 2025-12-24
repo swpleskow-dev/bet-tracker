@@ -16,22 +16,58 @@ type Bet = {
   line: number | null;
 };
 
+type Game = {
+  game_id: string;
+  home_team: string;
+  away_team: string;
+  home_score: number;
+  away_score: number;
+  period: number | null;
+  clock: string | null;
+  is_final: boolean;
+};
+
+
 export default function Page() {
   const [bets, setBets] = useState<Bet[]>([]);
+  const [gamesById, setGamesById] = useState<Record<string, Game>>({});
   const [gameId, setGameId] = useState("");
   const [betType, setBetType] = useState("total");
   const [selection, setSelection] = useState("over");
   const [line, setLine] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  async function loadBets() {
-    const { data, error } = await supabase.from("bets").select("*");
-    if (error) {
-      setError(error.message);
-      return;
-    }
-    setBets((data ?? []) as Bet[]);
+ async function loadBets() {
+  const { data: betData, error: betErr } = await supabase.from("bets").select("*");
+  if (betErr) {
+    setError(betErr.message);
+    return;
   }
+
+  const betRows = (betData ?? []) as Bet[];
+  setBets(betRows);
+
+  const ids = Array.from(new Set(betRows.map((b) => b.game_id).filter(Boolean)));
+  if (ids.length === 0) {
+    setGamesById({});
+    return;
+  }
+
+  const { data: gameData, error: gameErr } = await supabase
+    .from("games")
+    .select("*")
+    .in("game_id", ids);
+
+  if (gameErr) {
+    setError(gameErr.message);
+    return;
+  }
+
+  const map: Record<string, Game> = {};
+  for (const g of (gameData ?? []) as Game[]) map[g.game_id] = g;
+  setGamesById(map);
+}
+
 
   useEffect(() => {
     loadBets();
@@ -98,10 +134,25 @@ export default function Page() {
 
       <ul>
         {bets.map((b) => (
-          <li key={b.id}>
-            {b.bet_type} – {b.selection} {b.line !== null && `(${b.line})`} —{" "}
-            {b.game_id}
-          </li>
+          {bets.map((b) => {
+  const g = gamesById[b.game_id];
+
+  return (
+    <li key={b.id}>
+      {b.bet_type} – {b.selection} {b.line !== null && `(${b.line})`} — {b.game_id}
+      {g ? (
+        <>
+          {" "}
+          | {g.away_team} @ {g.home_team}: {g.away_score}-{g.home_score}{" "}
+          {g.is_final ? "(Final)" : `(Q${g.period ?? "?"} ${g.clock ?? ""})`}
+        </>
+      ) : (
+        " | (no game data)"
+      )}
+    </li>
+  );
+})}
+
         ))}
       </ul>
     </main>
