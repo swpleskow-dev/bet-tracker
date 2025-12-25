@@ -1,155 +1,130 @@
+// app/api/bets/parse-slip/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+// IMPORTANT: ensure this runs on Node (Edge has limitations for file/buffer handling)
 export const runtime = "nodejs";
 
-
-// Server-side Supabase client (service role recommended)
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY ??
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-type ParsedGame = {
-  game_date?: string; // YYYY-MM-DD
-  home_team?: string;
-  away_team?: string;
-};
-
-type ParsedLeg = {
-  bet_type: "moneyline" | "spread" | "total" | "player_prop";
-  selection?: string; // team name, "over"/"under", etc.
-  line?: number | null;
-  odds?: number | null;
-  // props:
-  prop_player?: string | null;
-  prop_market?: string | null;
-  prop_side?: string | null; // over/under/yes/no
-  prop_line?: number | null;
-  // game identification for the leg
-  game?: ParsedGame;
-};
-
-type ParsedSlip = {
-  sport: "NFL";
-  bet_type: "moneyline" | "spread" | "total" | "player_prop" | "parlay";
-  stake: number | null;
-  odds: number | null;
-
-  // single bet / single prop:
-  selection?: string | null;
-  line?: number | null;
-
-  // prop fields (single prop):
-  prop_player?: string | null;
-  prop_market?: string | null;
-  prop_side?: string | null;
-  prop_line?: number | null;
-
-  // game identification (single)
-  game?: ParsedGame;
-
-  // parlay legs
-  legs?: ParsedLeg[];
-
-  // optional metadata
-  sportsbook?: string | null;
-  confidence?: number | null; // 0..1
-};
-
-// --- Helpers ---
-function guessMime(name: string) {
-  const n = name.toLowerCase();
-  if (n.endsWith(".png")) return "image/png";
-  if (n.endsWith(".webp")) return "image/webp";
-  return "image/jpeg";
+function ymd(d: Date) {
+  return d.toISOString().slice(0, 10);
 }
 
-async function findGameIdFromGame(g?: ParsedGame): Promise<string | null> {
-  if (!g) return null;
-  const date = (g.game_date ?? "").slice(0, 10);
-  const home = (g.home_team ?? "").trim();
-  const away = (g.away_team ?? "").trim();
-  if (!date || !home || !away) return null;
+async function fileToDataUrl(file: File) {
+  const ab = await file.arrayBuffer();
+  const buf = Buffer.from(ab);
+  const mime = file.type || "image/png";
+  const b64 = buf.toString("base64");
+  return `data:${mime};base64,${b64}`;
+}
 
-  // Try exact-ish match first
+function norm(s: any) {
+  return String(s ?? "").trim();
+}
+
+async function matchGameIdFromParsedGame(game: any) {
+  const home = norm(game?.home_team).toUpperCase();
+  const away = norm(game?.away_team).toUpperCase();
+  const date = norm(game?.game_date).slice(0, 10);
+
+  if (!home || !away) return null;
+
+  // If date missing, search a reasonable window
+  const from = date ? date : ymd(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
+  const to = date ? date : ymd(new Date(Date.now() + 365 * 24 * 60 * 60 * 1000));
+
   const { data, error } = await supabase
     .from("games")
     .select("game_id, game_date, home_team, away_team")
-    .eq("game_date", date)
-    .or(`home_team.ilike.%${home}%,away_team.ilike.%${home}%`)
-    .limit(50);
+    .gte("game_date", from)
+    .lte("game_date", to)
+    .or(
+      `and(home_team.ilike.%${home}%,away_team.ilike.%${away}%),and(home_team.ilike.%${away}%,away_team.ilike.%${home}%)`
+    )
+    .order("game_date", { ascending: false })
+    .limit(25);
 
-  if (error || !data) return null;
+  if (error) return null;
+  if (!data || data.length === 0) return null;
 
-  // Prefer row where both teams match somewhere
-  const upperHome = home.toUpperCase();
-  const upperAway = away.toUpperCase();
+  // Best-effort: prefer exact team string matches, then prefer date proximity if date provided
+  const scored = data.map((g: any) => {
+    const h = String(g.home_team ?? "").toUpperCase();
+    const a = String(g.away_team ?? "").toUpperCase();
+    let score = 0;
 
-  const best =
-    data.find((row: any) => {
-      const ht = String(row.home_team ?? "").toUpperCase();
-      const at = String(row.away_team ?? "").toUpperCase();
-      return (ht.includes(upperHome) && at.includes(upperAway)) || (ht.includes(upperAway) && at.includes(upperHome));
-    }) ?? null;
+    if (h === home) score += 4;
+    if (a === away) score += 4;
+    if (h.includes(home)) score += 2;
+    if (a.includes(away)) score += 2;
 
-  return best ? String(best.game_id) : null;
+    if (h === away) score += 4;
+    if (a === home) score += 4;
+    if (h.includes(away)) score += 2;
+    if (a.includes(home)) score += 2;
+
+    if (date && g.game_date === date) score += 5;
+
+    return { g, score };
+  });
+
+  scored.sort((x: any, y: any) => y.score - x.score);
+  return scored[0]?.g?.game_id ?? null;
 }
 
-export async function POST(req: Request) {
-  try {
-    if (!OPENAI_API_KEY) {
-      return NextResponse.json(
-        { error: "Missing OPENAI_API_KEY on server." },
-        { status: 500 }
-      );
-    }
-
-    const form = await req.formData();
-    const file = form.get("image") as File | null;
-    if (!file) return NextResponse.json({ error: "No image uploaded." }, { status: 400 });
-
-    const buf = Buffer.from(await file.arrayBuffer());
-    const mime = file.type || guessMime(file.name);
-    const dataUrl = `data:${mime};base64,${buf.toString("base64")}`;
-
-    const betSlipSchema = {
+const betSlipSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
     sport: { type: "string", enum: ["NFL"] },
-    bet_type: { type: "string", enum: ["moneyline", "spread", "total", "player_prop", "parlay"] },
+
+    bet_type: {
+      type: "string",
+      enum: ["moneyline", "spread", "total", "player_prop", "parlay"],
+    },
+
     stake: { type: ["number", "null"] },
     odds: { type: ["number", "null"] },
+
+    // singles (moneyline/spread/total)
     selection: { type: ["string", "null"] },
     line: { type: ["number", "null"] },
 
+    // props
     prop_player: { type: ["string", "null"] },
     prop_market: { type: ["string", "null"] },
-    prop_side: { type: ["string", "null"] },
+    prop_side: { type: ["string", "null"] }, // "over" | "under"
     prop_line: { type: ["number", "null"] },
 
+    // game info (used to match game_id)
     game: {
       type: ["object", "null"],
       additionalProperties: false,
       properties: {
-        game_date: { type: ["string", "null"] },
+        game_date: { type: ["string", "null"] }, // YYYY-MM-DD ideally
         home_team: { type: ["string", "null"] },
         away_team: { type: ["string", "null"] },
       },
       required: [],
     },
 
+    // parlay legs
     legs: {
       type: ["array", "null"],
       items: {
         type: "object",
         additionalProperties: false,
         properties: {
-          bet_type: { type: "string", enum: ["moneyline", "spread", "total", "player_prop"] },
+          bet_type: {
+            type: "string",
+            enum: ["moneyline", "spread", "total", "player_prop"],
+          },
           selection: { type: ["string", "null"] },
           line: { type: ["number", "null"] },
           odds: { type: ["number", "null"] },
@@ -178,27 +153,44 @@ export async function POST(req: Request) {
     confidence: { type: ["number", "null"] },
   },
   required: ["sport", "bet_type", "stake", "odds"],
-};
+} as const;
 
+export async function POST(req: Request) {
+  try {
+    if (!OPENAI_API_KEY) {
+      return NextResponse.json(
+        { error: "Server misconfigured: OPENAI_API_KEY is missing." },
+        { status: 500 }
+      );
+    }
+
+    const fd = await req.formData();
+    const image = fd.get("image");
+
+    if (!image || !(image instanceof File)) {
+      return NextResponse.json({ error: "Missing image file (field name: image)." }, { status: 400 });
+    }
+
+    const dataUrl = await fileToDataUrl(image);
 
     const prompt = `
-You are extracting a sports bet slip screenshot into JSON.
-- The sport is NFL.
-- Determine whether this is: moneyline, spread, total, player_prop, or parlay.
-- Extract stake (amount risked) and odds (American odds, e.g. -110 or +250).
-- For singles: extract selection + line as applicable.
-- For player props: extract player name, market (e.g. Passing Yards), side (over/under), prop_line.
-- For parlays: return legs[], each with its own bet_type, selection/line/odds, and if a prop leg include prop_* fields.
-- For each bet (single or leg), include game: {game_date, away_team, home_team} when visible. Use YYYY-MM-DD if possible.
-Return only valid JSON matching the schema.
-`;
+You are parsing a sportsbook bet slip screenshot into structured data for an NFL bet tracker.
+Rules:
+- Output MUST match the provided JSON schema exactly.
+- If a field isn't visible, use null.
+- bet_type must be one of: moneyline | spread | total | player_prop | parlay
+- For total: selection should be "over" or "under" and line is the total number.
+- For spread: selection is the team name and line is the spread number (e.g. -3.5).
+- For moneyline: selection is the team name and line must be null.
+- For player_prop: fill prop_player, prop_market, prop_side ("over"/"under"), prop_line; selection/line can be null.
+- For parlay: fill legs array with each leg details, and put stake/odds for the full parlay if visible.
+Also attempt to infer the game information (game.home_team, game.away_team, game.game_date) when visible.
+    `.trim();
 
-    // OpenAI Responses API supports image inputs :contentReference[oaicite:1]{index=1}
-    // Structured outputs with json_schema :contentReference[oaicite:2]{index=2}
     const openaiRes = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -212,83 +204,96 @@ Return only valid JSON matching the schema.
             ],
           },
         ],
+        // ✅ FIX: name is required at text.format.*top-level* (not nested under json_schema)
         text: {
-  format: {
-    type: "json_schema",
-    name: "bet_slip",
-    strict: true,
-    schema: schema.schema, // <-- the actual JSON Schema object
-  },
-},
-
+          format: {
+            type: "json_schema",
+            name: "bet_slip",
+            strict: true,
+            schema: betSlipSchema,
+          },
         },
       }),
     });
 
     if (!openaiRes.ok) {
-  const contentType = openaiRes.headers.get("content-type") || "";
-  const requestId =
-    openaiRes.headers.get("x-request-id") ||
-    openaiRes.headers.get("openai-request-id") ||
-    null;
+      const contentType = openaiRes.headers.get("content-type") || "";
+      const requestId =
+        openaiRes.headers.get("x-request-id") ||
+        openaiRes.headers.get("openai-request-id") ||
+        null;
 
-  const body = contentType.includes("application/json")
-    ? await openaiRes.json().catch(() => null)
-    : await openaiRes.text().catch(() => null);
+      const body = contentType.includes("application/json")
+        ? await openaiRes.json().catch(() => null)
+        : await openaiRes.text().catch(() => null);
 
-  console.error("OPENAI ERROR", {
-    status: openaiRes.status,
-    requestId,
-    body,
-  });
+      console.error("OPENAI ERROR", {
+        status: openaiRes.status,
+        requestId,
+        body,
+      });
 
-  return NextResponse.json(
-    {
-      error: "OpenAI request failed",
-      status: openaiRes.status,
-      requestId,
-      body,
-    },
-    { status: 500 }
-  );
-}
+      return NextResponse.json(
+        {
+          error: "OpenAI request failed",
+          status: openaiRes.status,
+          requestId,
+          body,
+        },
+        { status: 500 }
+      );
+    }
 
+    const responseJson = await openaiRes.json();
 
-    const out = await openaiRes.json();
-
-    // Responses API returns text in output[].content[].text; this is the JSON string
-    const jsonText =
-      out?.output?.[0]?.content?.find((c: any) => c?.type === "output_text")?.text ??
-      out?.output_text ??
+    // Responses API: the model output can appear in output_text.
+    // We'll try a few common shapes safely.
+    const outputText =
+      responseJson?.output_text ??
+      responseJson?.output?.[0]?.content?.find((c: any) => c?.type === "output_text")?.text ??
+      responseJson?.output?.[0]?.content?.[0]?.text ??
       null;
 
-    if (!jsonText) {
-      return NextResponse.json({ error: "No JSON returned from model." }, { status: 500 });
+    if (!outputText || typeof outputText !== "string") {
+      return NextResponse.json(
+        {
+          error: "OpenAI response did not include output_text.",
+          debug: { keys: Object.keys(responseJson ?? {}) },
+        },
+        { status: 500 }
+      );
     }
 
-    let parsed: ParsedSlip;
+    let parsed: any = null;
     try {
-      parsed = JSON.parse(jsonText);
+      parsed = JSON.parse(outputText);
     } catch {
-      return NextResponse.json({ error: "Model returned non-JSON." }, { status: 500 });
+      // If for any reason it isn't valid JSON, return it for debugging
+      return NextResponse.json(
+        { error: "Model output was not valid JSON.", raw: outputText },
+        { status: 500 }
+      );
     }
 
-    // Map to your internal game_id(s)
-    if (parsed.bet_type !== "parlay") {
-      const game_id = await findGameIdFromGame(parsed.game);
-      return NextResponse.json({ parsed, game_id });
+    // Attempt to match a game_id for the top-level (single bet / prop)
+    const topGameId = await matchGameIdFromParsedGame(parsed?.game);
+
+    // Attempt to match game_id for each parlay leg (optional)
+    if (Array.isArray(parsed?.legs)) {
+      const legsWithIds = [];
+      for (const leg of parsed.legs) {
+        const legGameId = await matchGameIdFromParsedGame(leg?.game);
+        legsWithIds.push({ ...leg, game_id: legGameId });
+      }
+      parsed.legs = legsWithIds;
     }
 
-    const legs = parsed.legs ?? [];
-    const mapped = await Promise.all(
-      legs.map(async (leg) => ({
-        ...leg,
-        game_id: await findGameIdFromGame(leg.game),
-      }))
-    );
-
-    return NextResponse.json({ parsed: { ...parsed, legs: mapped } });
+    return NextResponse.json({
+      parsed,
+      game_id: topGameId,
+    });
   } catch (e: any) {
+    console.error("parse-slip route error", e);
     return NextResponse.json(
       { error: e?.message ?? "unknown" },
       { status: 500 }
