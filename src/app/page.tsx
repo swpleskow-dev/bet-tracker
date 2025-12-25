@@ -989,7 +989,22 @@ export default function Page() {
 
       const r = await fetch("/api/bets/parse-slip", { method: "POST", body: fd });
       const j = await r.json();
-      if (!r.ok) return setImportError(j?.error ?? "Parse failed");
+if (!r.ok) {
+  const detail =
+    j?.status
+      ? `(${j.status}) `
+      : "";
+  const req =
+    j?.requestId
+      ? ` req:${j.requestId}`
+      : "";
+  const body =
+    j?.body
+      ? ` — ${typeof j.body === "string" ? j.body : JSON.stringify(j.body)}`
+      : "";
+
+  return setImportError(`${j?.error ?? "Parse failed"} ${detail}${req}${body}`);
+}
 
       setImportResult(j);
       setImportOpen(true);
