@@ -116,23 +116,43 @@ export async function POST(req: Request) {
     const mime = file.type || guessMime(file.name);
     const dataUrl = `data:${mime};base64,${buf.toString("base64")}`;
 
-    const schema = {
-      name: "bet_slip",
-      strict: true,
-      schema: {
+    const betSlipSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    sport: { type: "string", enum: ["NFL"] },
+    bet_type: { type: "string", enum: ["moneyline", "spread", "total", "player_prop", "parlay"] },
+    stake: { type: ["number", "null"] },
+    odds: { type: ["number", "null"] },
+    selection: { type: ["string", "null"] },
+    line: { type: ["number", "null"] },
+
+    prop_player: { type: ["string", "null"] },
+    prop_market: { type: ["string", "null"] },
+    prop_side: { type: ["string", "null"] },
+    prop_line: { type: ["number", "null"] },
+
+    game: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      properties: {
+        game_date: { type: ["string", "null"] },
+        home_team: { type: ["string", "null"] },
+        away_team: { type: ["string", "null"] },
+      },
+      required: [],
+    },
+
+    legs: {
+      type: ["array", "null"],
+      items: {
         type: "object",
         additionalProperties: false,
         properties: {
-          sport: { type: "string", enum: ["NFL"] },
-          bet_type: {
-            type: "string",
-            enum: ["moneyline", "spread", "total", "player_prop", "parlay"],
-          },
-          stake: { type: ["number", "null"] },
-          odds: { type: ["number", "null"] },
-
+          bet_type: { type: "string", enum: ["moneyline", "spread", "total", "player_prop"] },
           selection: { type: ["string", "null"] },
           line: { type: ["number", "null"] },
+          odds: { type: ["number", "null"] },
 
           prop_player: { type: ["string", "null"] },
           prop_market: { type: ["string", "null"] },
@@ -149,47 +169,17 @@ export async function POST(req: Request) {
             },
             required: [],
           },
-
-          legs: {
-            type: ["array", "null"],
-            items: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                bet_type: {
-                  type: "string",
-                  enum: ["moneyline", "spread", "total", "player_prop"],
-                },
-                selection: { type: ["string", "null"] },
-                line: { type: ["number", "null"] },
-                odds: { type: ["number", "null"] },
-
-                prop_player: { type: ["string", "null"] },
-                prop_market: { type: ["string", "null"] },
-                prop_side: { type: ["string", "null"] },
-                prop_line: { type: ["number", "null"] },
-
-                game: {
-                  type: ["object", "null"],
-                  additionalProperties: false,
-                  properties: {
-                    game_date: { type: ["string", "null"] },
-                    home_team: { type: ["string", "null"] },
-                    away_team: { type: ["string", "null"] },
-                  },
-                  required: [],
-                },
-              },
-              required: ["bet_type"],
-            },
-          },
-
-          sportsbook: { type: ["string", "null"] },
-          confidence: { type: ["number", "null"] },
         },
-        required: ["sport", "bet_type", "stake", "odds"],
+        required: ["bet_type"],
       },
-    };
+    },
+
+    sportsbook: { type: ["string", "null"] },
+    confidence: { type: ["number", "null"] },
+  },
+  required: ["sport", "bet_type", "stake", "odds"],
+};
+
 
     const prompt = `
 You are extracting a sports bet slip screenshot into JSON.
@@ -223,10 +213,14 @@ Return only valid JSON matching the schema.
           },
         ],
         text: {
-          format: {
-            type: "json_schema",
-            json_schema: schema,
-          },
+  format: {
+    type: "json_schema",
+    name: "bet_slip",
+    strict: true,
+    schema: schema.schema, // <-- the actual JSON Schema object
+  },
+},
+
         },
       }),
     });
