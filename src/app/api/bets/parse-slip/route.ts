@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+export const runtime = "nodejs";
+
+
 // Server-side Supabase client (service role recommended)
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -229,12 +232,33 @@ Return only valid JSON matching the schema.
     });
 
     if (!openaiRes.ok) {
-      const errText = await openaiRes.text();
-      return NextResponse.json(
-        { error: "OpenAI request failed", detail: errText },
-        { status: 500 }
-      );
-    }
+  const contentType = openaiRes.headers.get("content-type") || "";
+  const requestId =
+    openaiRes.headers.get("x-request-id") ||
+    openaiRes.headers.get("openai-request-id") ||
+    null;
+
+  const body = contentType.includes("application/json")
+    ? await openaiRes.json().catch(() => null)
+    : await openaiRes.text().catch(() => null);
+
+  console.error("OPENAI ERROR", {
+    status: openaiRes.status,
+    requestId,
+    body,
+  });
+
+  return NextResponse.json(
+    {
+      error: "OpenAI request failed",
+      status: openaiRes.status,
+      requestId,
+      body,
+    },
+    { status: 500 }
+  );
+}
+
 
     const out = await openaiRes.json();
 
