@@ -21,7 +21,7 @@ type Bet = {
   sport: string;
 
   // For single bets + props: game_id is the actual game id
-  // For parlays: game_id stores the parlay id string (for convenience)
+  // For parlays: game_id stores the parlay id string
   game_id: string;
 
   bet_type: BetType;
@@ -39,11 +39,11 @@ type Bet = {
   // props (stored on bets row)
   prop_player: string | null;
   prop_market: string | null;
-  prop_side: string | null; // "over"/"under" (or anything you want later)
+  prop_side: string | null; // "over"/"under"
   prop_line: number | null;
   prop_notes: string | null;
 
-  // manual grading override (used for props; can also be used for anything later)
+  // manual grading override (used for props)
   result_override: string | null; // "Won" | "Lost" | "Push" | "Pending"
 };
 
@@ -86,8 +86,10 @@ function statusText(g: GameRow) {
   return "Scheduled";
 }
 
-// ---------- Result helpers ----------
-type Result = { label: "Won" | "Lost" | "Push" | "Pending" | "No game data"; tone: "good" | "bad" | "neutral" };
+type Result = {
+  label: "Won" | "Lost" | "Push" | "Pending" | "No game data";
+  tone: "good" | "bad" | "neutral";
+};
 
 function normalizeOverride(v: string | null | undefined): Result | null {
   const x = (v ?? "").toLowerCase().trim();
@@ -98,7 +100,12 @@ function normalizeOverride(v: string | null | undefined): Result | null {
   return null;
 }
 
-function calcResultLike(betType: "moneyline" | "spread" | "total", selection: string, line: number | null, g?: GameRow): Result {
+function calcResultLike(
+  betType: "moneyline" | "spread" | "total",
+  selection: string,
+  line: number | null,
+  g?: GameRow
+): Result {
   if (!g) return { label: "No game data", tone: "neutral" };
   const hs = g.home_score ?? 0;
   const as = g.away_score ?? 0;
@@ -116,7 +123,8 @@ function calcResultLike(betType: "moneyline" | "spread" | "total", selection: st
     const pick = selection.toLowerCase();
 
     if (total === ln) return { label: "Push", tone: "neutral" };
-    const won = pick === "over" ? total > ln : pick === "under" ? total < ln : false;
+    const won =
+      pick === "over" ? total > ln : pick === "under" ? total < ln : false;
     return won ? { label: "Won", tone: "good" } : { label: "Lost", tone: "bad" };
   }
 
@@ -132,7 +140,9 @@ function calcResultLike(betType: "moneyline" | "spread" | "total", selection: st
     const diffFromPick = pickedHome ? (hs - as) + ln : (as - hs) + ln;
 
     if (diffFromPick === 0) return { label: "Push", tone: "neutral" };
-    return diffFromPick > 0 ? { label: "Won", tone: "good" } : { label: "Lost", tone: "bad" };
+    return diffFromPick > 0
+      ? { label: "Won", tone: "good" }
+      : { label: "Lost", tone: "bad" };
   }
 
   // moneyline
@@ -166,7 +176,7 @@ function Pill({ text, tone }: { text: string; tone: "good" | "bad" | "neutral" }
   );
 }
 
-// ---------- Odds / Profit ----------
+/** ---------- Odds / Profit ---------- */
 function americanToDecimal(odds: number) {
   if (!Number.isFinite(odds) || odds === 0) return 1;
   return odds > 0 ? 1 + odds / 100 : 1 + 100 / Math.abs(odds);
@@ -212,8 +222,11 @@ function parlayGrade(legs: ParlayLeg[], gamesById: Record<string, GameRow>): Res
   return { label: "Won", tone: "good" };
 }
 
-function effectiveParlayOddsForProfit(legs: ParlayLeg[], gamesById: Record<string, GameRow>, fallbackOdds: number) {
-  // Adjust payout if some legs push by removing them from the multiplier
+function effectiveParlayOddsForProfit(
+  legs: ParlayLeg[],
+  gamesById: Record<string, GameRow>,
+  fallbackOdds: number
+) {
   const grade = parlayGrade(legs, gamesById);
   if (grade.label !== "Won") return fallbackOdds;
 
@@ -248,13 +261,13 @@ export default function Page() {
   const [gamesById, setGamesById] = useState<Record<string, GameRow>>({});
   const [legsByParlayId, setLegsByParlayId] = useState<Record<string, ParlayLeg[]>>({});
 
-  // form: shared
+  // ---- form: shared ----
   const [bettor, setBettor] = useState<Bettor>("sydney");
   const [betType, setBetType] = useState<BetType>("total");
   const [stake, setStake] = useState<string>("1");
   const [odds, setOdds] = useState<string>("-110");
 
-  // single bet inputs (moneyline/spread/total)
+  // ---- single bet (moneyline/spread/total) ----
   const [singleGameId, setSingleGameId] = useState("");
   const [singleSelectedGame, setSingleSelectedGame] = useState<GameRow | null>(null);
   const [singleSelection, setSingleSelection] = useState<string>("over");
@@ -267,7 +280,7 @@ export default function Page() {
   const [singleSearchLoading, setSingleSearchLoading] = useState(false);
   const singleSearchBoxRef = useRef<HTMLDivElement | null>(null);
 
-  // player props
+  // ---- player props ----
   const [propGameId, setPropGameId] = useState("");
   const [propSelectedGame, setPropSelectedGame] = useState<GameRow | null>(null);
   const [propGameSearch, setPropGameSearch] = useState("");
@@ -282,7 +295,7 @@ export default function Page() {
   const [propLine, setPropLine] = useState("");
   const [propNotes, setPropNotes] = useState("");
 
-  // parlay builder
+  // ---- parlay builder ----
   type DraftLeg = {
     tmpId: string;
     game_id: string;
@@ -308,12 +321,24 @@ export default function Page() {
   const [legSearchLoading, setLegSearchLoading] = useState(false);
   const legSearchBoxRef = useRef<HTMLDivElement | null>(null);
 
-  // viewing filter
+  // ---- view filter ----
   const [viewBettor, setViewBettor] = useState<"all" | Bettor>("all");
+
+  // ---- import from screenshot ----
+  type ImportSlipResponse =
+    | { parsed: any; game_id?: string | null }
+    | { parsed: any };
+
+  const [importBettor, setImportBettor] = useState<Bettor>("sydney");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importResult, setImportResult] = useState<ImportSlipResponse | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
 
-  // ---------- Load ----------
+  /** ---------- Load ---------- */
   async function loadAll() {
     setError(null);
 
@@ -352,7 +377,6 @@ export default function Page() {
       new Set(betRows.filter((b) => b.bet_type === "parlay").map((b) => b.parlay_id).filter(Boolean))
     ) as string[];
 
-    // Fetch legs for all parlays
     let fetchedLegs: ParlayLeg[] = [];
     if (parlayIds.length > 0) {
       const { data: legData, error: legErr } = await supabase
@@ -388,7 +412,6 @@ export default function Page() {
       setLegsByParlayId({});
     }
 
-    // Collect all game IDs we need
     const gameIdsFromSingles = betRows
       .filter((b) => b.bet_type !== "parlay")
       .map((b) => b.game_id)
@@ -424,7 +447,7 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---------- Outside click to close dropdowns ----------
+  /** ---------- Outside click closes dropdowns ---------- */
   useEffect(() => {
     function onClick(e: MouseEvent) {
       const t = e.target as Node;
@@ -436,7 +459,7 @@ export default function Page() {
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  // ---------- Debounced search (single) ----------
+  /** ---------- Debounced search helpers ---------- */
   useEffect(() => {
     const q = singleGameSearch.trim();
     if (q.length < 2) {
@@ -446,7 +469,6 @@ export default function Page() {
     }
 
     setSingleSearchLoading(true);
-
     const t = setTimeout(async () => {
       try {
         const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
@@ -459,11 +481,9 @@ export default function Page() {
         setSingleSearchLoading(false);
       }
     }, 250);
-
     return () => clearTimeout(t);
   }, [singleGameSearch]);
 
-  // ---------- Debounced search (prop game) ----------
   useEffect(() => {
     const q = propGameSearch.trim();
     if (q.length < 2) {
@@ -473,7 +493,6 @@ export default function Page() {
     }
 
     setPropSearchLoading(true);
-
     const t = setTimeout(async () => {
       try {
         const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
@@ -486,11 +505,9 @@ export default function Page() {
         setPropSearchLoading(false);
       }
     }, 250);
-
     return () => clearTimeout(t);
   }, [propGameSearch]);
 
-  // ---------- Debounced search (parlay leg) ----------
   useEffect(() => {
     const q = legGameSearch.trim();
     if (q.length < 2) {
@@ -500,7 +517,6 @@ export default function Page() {
     }
 
     setLegSearchLoading(true);
-
     const t = setTimeout(async () => {
       try {
         const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
@@ -513,11 +529,10 @@ export default function Page() {
         setLegSearchLoading(false);
       }
     }, 250);
-
     return () => clearTimeout(t);
   }, [legGameSearch]);
 
-  // ---------- Intuitive selection (single bet) ----------
+  /** ---------- Intuitive selection ---------- */
   useEffect(() => {
     if (betType === "parlay" || betType === "player_prop") return;
     if (betType === "total") {
@@ -533,7 +548,6 @@ export default function Page() {
     setSingleSelection((prev) => (prev === away || prev === home ? prev : away));
   }, [betType, singleSelectedGame]);
 
-  // ---------- Intuitive selection (leg builder) ----------
   useEffect(() => {
     if (legType === "total") {
       setLegSelection((prev) => (prev === "under" ? "under" : "over"));
@@ -548,411 +562,19 @@ export default function Page() {
     setLegSelection((prev) => (prev === away || prev === home ? prev : away));
   }, [legType, legSelectedGame]);
 
-  // Auto-fill parlay odds from legs (still editable)
+  // Auto-fill parlay odds from legs
   useEffect(() => {
     if (betType !== "parlay") return;
     if (parlayLegs.length === 0) return;
 
-    const legOddsNums = parlayLegs.map((l) => Number(l.odds));
-    if (legOddsNums.some((n) => !Number.isFinite(n) || n === 0)) return;
+    const nums = parlayLegs.map((l) => Number(l.odds));
+    if (nums.some((n) => !Number.isFinite(n) || n === 0)) return;
 
-    const computed = computeParlayAmericanOddsFromLegOdds(legOddsNums.map((o) => ({ odds: o })));
+    const computed = computeParlayAmericanOddsFromLegOdds(nums.map((o) => ({ odds: o })));
     if (computed !== 0) setOdds(String(computed));
   }, [betType, parlayLegs]);
 
-  // ---------- Selection UI ----------
-  const singleSelectionUI =
-    betType === "total" ? (
-      <select value={singleSelection} onChange={(e) => setSingleSelection(e.target.value)} style={inputStyle}>
-        <option value="over">over</option>
-        <option value="under">under</option>
-      </select>
-    ) : (
-      <select value={singleSelection} onChange={(e) => setSingleSelection(e.target.value)} style={inputStyle} disabled={!singleSelectedGame}>
-        <option value="">{singleSelectedGame ? "Select team…" : "Pick a game first…"}</option>
-        {singleSelectedGame && (
-          <>
-            <option value={singleSelectedGame.away_team}>{singleSelectedGame.away_team} (away)</option>
-            <option value={singleSelectedGame.home_team}>{singleSelectedGame.home_team} (home)</option>
-          </>
-        )}
-      </select>
-    );
-
-  const legSelectionUI =
-    legType === "total" ? (
-      <select value={legSelection} onChange={(e) => setLegSelection(e.target.value)} style={inputStyle}>
-        <option value="over">over</option>
-        <option value="under">under</option>
-      </select>
-    ) : (
-      <select value={legSelection} onChange={(e) => setLegSelection(e.target.value)} style={inputStyle} disabled={!legSelectedGame}>
-        <option value="">{legSelectedGame ? "Select team…" : "Pick a game first…"}</option>
-        {legSelectedGame && (
-          <>
-            <option value={legSelectedGame.away_team}>{legSelectedGame.away_team} (away)</option>
-            <option value={legSelectedGame.home_team}>{legSelectedGame.home_team} (home)</option>
-          </>
-        )}
-      </select>
-    );
-
-  // ---------- Result for any bet ----------
-  function betResult(b: Bet): Result {
-    const o = normalizeOverride(b.result_override);
-    if (o) return o;
-
-    if (b.bet_type === "player_prop") {
-      // Until you hook up player stat data, props are manual grade.
-      return { label: "Pending", tone: "neutral" };
-    }
-
-    if (b.bet_type === "parlay") {
-      const pid = b.parlay_id ?? "";
-      const legs = pid ? legsByParlayId[pid] ?? [] : [];
-      return parlayGrade(legs, gamesById);
-    }
-
-    const g = gamesById[b.game_id];
-    return calcResultLike(b.bet_type, b.selection, b.line, g);
-  }
-
-  function betProfit(b: Bet) {
-    const stakeNum = Number(b.stake ?? 0);
-    const r = betResult(b);
-
-    if (r.label === "Won") {
-      if (b.bet_type === "parlay") {
-        const pid = b.parlay_id ?? "";
-        const legs = pid ? legsByParlayId[pid] ?? [] : [];
-        const effOdds = effectiveParlayOddsForProfit(legs, gamesById, Number(b.odds ?? 0));
-        return profitFromAmericanOdds(stakeNum, effOdds);
-      }
-      return profitFromAmericanOdds(stakeNum, Number(b.odds ?? 0));
-    }
-    if (r.label === "Lost") return -stakeNum;
-    return 0; // Pending/Push/No data
-  }
-
-  function computeSummary(list: Bet[]): Summary {
-    return list.reduce(
-      (acc, b) => {
-        const r = betResult(b);
-        if (r.label === "Won") {
-          const p = betProfit(b);
-          acc.wins += 1;
-          acc.totalWinnings += p;
-          acc.net += p;
-        } else if (r.label === "Lost") {
-          const s = Number(b.stake ?? 0);
-          acc.losses += 1;
-          acc.totalLosses += s;
-          acc.net -= s;
-        } else if (r.label === "Push") {
-          acc.pushes += 1;
-        } else {
-          acc.pending += 1;
-        }
-        return acc;
-      },
-      { wins: 0, losses: 0, pushes: 0, pending: 0, totalWinnings: 0, totalLosses: 0, net: 0 }
-    );
-  }
-
-  // ---------- Add bets ----------
-  async function addSingleBet(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-
-    if (!singleGameId) return setError("Please select a game.");
-    if (!singleSelection.trim()) return setError("Please choose a selection.");
-
-    if (betType !== "moneyline" && betType !== "parlay" && betType !== "player_prop") {
-      const parsed = Number(singleLine);
-      if (!singleLine.trim() || Number.isNaN(parsed)) return setError("Line must be a number for spread/total.");
-    }
-
-    const stakeNum = Number(stake);
-    const oddsNum = Number(odds);
-
-    if (!stake.trim() || Number.isNaN(stakeNum) || stakeNum <= 0) return setError("Stake must be a positive number.");
-    if (!odds.trim() || Number.isNaN(oddsNum) || oddsNum === 0)
-      return setError("Odds must be a non-zero number (e.g. -110, +150).");
-
-    const { error } = await supabase.from("bets").insert({
-      user_id: USER_ID,
-      sport: "NFL",
-      game_id: singleGameId,
-      bet_type: betType,
-      selection: singleSelection,
-      line: betType === "moneyline" ? null : Number(singleLine),
-
-      stake: stakeNum,
-      odds: oddsNum,
-      bettor,
-      parlay_id: null,
-
-      prop_player: null,
-      prop_market: null,
-      prop_side: null,
-      prop_line: null,
-      prop_notes: null,
-      result_override: null,
-    });
-
-    if (error) return setError(error.message);
-
-    // reset
-    setSingleLine("");
-    setBetType("total");
-    setSingleSelection("over");
-    setStake("1");
-    setOdds("-110");
-    setSingleGameId("");
-    setSingleSelectedGame(null);
-    setSingleGameSearch("");
-
-    await loadAll();
-  }
-
-  async function addPropBet(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-
-    if (!propGameId) return setError("Please select a game.");
-    if (!propPlayer.trim()) return setError("Player is required.");
-    if (!propMarket.trim()) return setError("Market is required.");
-    const ln = Number(propLine);
-    if (!propLine.trim() || Number.isNaN(ln)) return setError("Prop line must be a number.");
-
-    const stakeNum = Number(stake);
-    const oddsNum = Number(odds);
-    if (!stake.trim() || Number.isNaN(stakeNum) || stakeNum <= 0) return setError("Stake must be a positive number.");
-    if (!odds.trim() || Number.isNaN(oddsNum) || oddsNum === 0)
-      return setError("Odds must be a non-zero number (e.g. -110, +150).");
-
-    const { error } = await supabase.from("bets").insert({
-      user_id: USER_ID,
-      sport: "NFL",
-      game_id: propGameId,
-      bet_type: "player_prop",
-      selection: "prop",
-      line: null,
-
-      stake: stakeNum,
-      odds: oddsNum,
-      bettor,
-      parlay_id: null,
-
-      prop_player: propPlayer.trim(),
-      prop_market: propMarket.trim(),
-      prop_side: propSide,
-      prop_line: ln,
-      prop_notes: propNotes.trim() ? propNotes.trim() : null,
-      result_override: "Pending",
-    });
-
-    if (error) return setError(error.message);
-
-    // reset (keep bettor)
-    setStake("1");
-    setOdds("-110");
-    setPropGameId("");
-    setPropSelectedGame(null);
-    setPropGameSearch("");
-    setPropPlayer("");
-    setPropMarket("");
-    setPropSide("over");
-    setPropLine("");
-    setPropNotes("");
-    setBetType("total");
-
-    await loadAll();
-  }
-
-  function addLegToParlay() {
-    setError(null);
-
-    if (!legGameId) return setError("Pick a game for the leg.");
-    if (!legSelection.trim()) return setError("Choose a leg selection.");
-
-    if (legType !== "moneyline") {
-      const ln = Number(legLine);
-      if (!legLine.trim() || Number.isNaN(ln)) return setError("Leg line must be a number for spread/total.");
-    }
-
-    const o = Number(legOdds);
-    if (!legOdds.trim() || Number.isNaN(o) || o === 0) return setError("Leg odds must be a non-zero number.");
-
-    const tmpId = (globalThis.crypto?.randomUUID?.() ?? `tmp-${Date.now()}-${Math.random()}`).toString();
-
-    setParlayLegs((prev) => [
-      ...prev,
-      {
-        tmpId,
-        game_id: legGameId,
-        game: legSelectedGame ?? undefined,
-        leg_type: legType,
-        selection: legSelection,
-        line: legType === "moneyline" ? "" : legLine,
-        odds: legOdds,
-      },
-    ]);
-
-    // reset leg inputs
-    setLegGameId("");
-    setLegSelectedGame(null);
-    setLegGameSearch("");
-    setLegLine("");
-    setLegSelection(legType === "total" ? "over" : "");
-    setLegOdds("-110");
-  }
-
-  async function submitParlay(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-
-    if (parlayLegs.length < 2) return setError("A parlay needs at least 2 legs.");
-
-    const stakeNum = Number(stake);
-    const oddsNum = Number(odds);
-
-    if (!stake.trim() || Number.isNaN(stakeNum) || stakeNum <= 0) return setError("Stake must be a positive number.");
-    if (!odds.trim() || Number.isNaN(oddsNum) || oddsNum === 0)
-      return setError("Parlay odds must be a non-zero number (auto-filled, but editable).");
-
-    const parlayId = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).toString();
-
-    const { error: headerErr } = await supabase.from("bets").insert({
-      user_id: USER_ID,
-      sport: "NFL",
-      game_id: parlayId, // store parlay id here
-      bet_type: "parlay",
-      selection: "parlay",
-      line: null,
-
-      stake: stakeNum,
-      odds: oddsNum,
-      bettor,
-      parlay_id: parlayId,
-
-      prop_player: null,
-      prop_market: null,
-      prop_side: null,
-      prop_line: null,
-      prop_notes: null,
-      result_override: null,
-    });
-
-    if (headerErr) return setError(headerErr.message);
-
-    const legsPayload = parlayLegs.map((l) => ({
-      user_id: USER_ID,
-      parlay_id: parlayId,
-      sport: "NFL",
-      game_id: l.game_id,
-      leg_type: l.leg_type,
-      selection: l.selection,
-      line: l.leg_type === "moneyline" ? null : Number(l.line),
-      odds: Number(l.odds),
-    }));
-
-    const { error: legsErr } = await supabase.from("parlay_legs").insert(legsPayload);
-    if (legsErr) return setError(legsErr.message);
-
-    // reset
-    setParlayLegs([]);
-    setStake("1");
-    setOdds("-110");
-    setBetType("total");
-
-    setLegType("total");
-    setLegSelection("over");
-    setLegLine("");
-    setLegOdds("-110");
-    setLegGameId("");
-    setLegSelectedGame(null);
-    setLegGameSearch("");
-
-    await loadAll();
-  }
-
-  // ---------- Update prop grade ----------
-  async function updatePropGrade(betId: string, next: "Pending" | "Won" | "Lost" | "Push") {
-    setError(null);
-    const { error } = await supabase
-      .from("bets")
-      .update({ result_override: next })
-      .eq("id", betId)
-      .eq("user_id", USER_ID);
-
-    if (error) setError(error.message);
-    else await loadAll();
-  }
-
-  // ---------- Delete ----------
-  async function deleteBetRow(b: Bet) {
-    setError(null);
-
-    const ok = confirm("Delete this bet?");
-    if (!ok) return;
-
-    if (b.bet_type === "parlay" && b.parlay_id) {
-      const { error: legDelErr } = await supabase
-        .from("parlay_legs")
-        .delete()
-        .eq("parlay_id", b.parlay_id)
-        .eq("user_id", USER_ID);
-
-      if (legDelErr) return setError(`Delete legs failed: ${legDelErr.message}`);
-    }
-
-    const { data, error } = await supabase
-      .from("bets")
-      .delete()
-      .eq("id", b.id)
-      .eq("user_id", USER_ID)
-      .select("id");
-
-    if (error) return setError(`Delete failed: ${error.message}`);
-    if (!data || data.length === 0) return setError("Delete did nothing (no row matched, or blocked by RLS).");
-
-    setBets((prev) => prev.filter((x) => x.id !== b.id));
-    await loadAll();
-  }
-
-  // ---------- Visible / Summaries ----------
-  const visibleBets = useMemo(() => {
-    return viewBettor === "all" ? bets : bets.filter((b) => b.bettor === viewBettor);
-  }, [bets, viewBettor]);
-
-  const summaryAll = useMemo(() => computeSummary(bets), [bets, gamesById, legsByParlayId]);
-  const summarySydney = useMemo(() => computeSummary(bets.filter((b) => b.bettor === "sydney")), [bets, gamesById, legsByParlayId]);
-  const summaryWilliam = useMemo(() => computeSummary(bets.filter((b) => b.bettor === "william")), [bets, gamesById, legsByParlayId]);
-
-  function SummaryCard({ title, s }: { title: string; s: Summary }) {
-    return (
-      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 14, minWidth: 260 }}>
-        <div style={{ fontWeight: 900, marginBottom: 8 }}>{title}</div>
-        <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
-          <div>
-            <b>Record:</b> {s.wins}-{s.losses}-{s.pushes} <span style={{ opacity: 0.7 }}>(Pending: {s.pending})</span>
-          </div>
-          <div>
-            <b>Total Winnings:</b> ${s.totalWinnings.toFixed(2)}
-          </div>
-          <div>
-            <b>Total Losses:</b> ${s.totalLosses.toFixed(2)}
-          </div>
-          <div>
-            <b>Net:</b> <span style={{ fontWeight: 900 }}>{formatSignedMoney(s.net)}</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ---------- Render helpers ----------
+  /** ---------- UI helpers ---------- */
   function renderGameSearch({
     boxRef,
     value,
@@ -1012,6 +634,518 @@ export default function Page() {
     );
   }
 
+  const singleSelectionUI =
+    betType === "total" ? (
+      <select value={singleSelection} onChange={(e) => setSingleSelection(e.target.value)} style={inputStyle}>
+        <option value="over">over</option>
+        <option value="under">under</option>
+      </select>
+    ) : (
+      <select value={singleSelection} onChange={(e) => setSingleSelection(e.target.value)} style={inputStyle} disabled={!singleSelectedGame}>
+        <option value="">{singleSelectedGame ? "Select team…" : "Pick a game first…"}</option>
+        {singleSelectedGame && (
+          <>
+            <option value={singleSelectedGame.away_team}>{singleSelectedGame.away_team} (away)</option>
+            <option value={singleSelectedGame.home_team}>{singleSelectedGame.home_team} (home)</option>
+          </>
+        )}
+      </select>
+    );
+
+  const legSelectionUI =
+    legType === "total" ? (
+      <select value={legSelection} onChange={(e) => setLegSelection(e.target.value)} style={inputStyle}>
+        <option value="over">over</option>
+        <option value="under">under</option>
+      </select>
+    ) : (
+      <select value={legSelection} onChange={(e) => setLegSelection(e.target.value)} style={inputStyle} disabled={!legSelectedGame}>
+        <option value="">{legSelectedGame ? "Select team…" : "Pick a game first…"}</option>
+        {legSelectedGame && (
+          <>
+            <option value={legSelectedGame.away_team}>{legSelectedGame.away_team} (away)</option>
+            <option value={legSelectedGame.home_team}>{legSelectedGame.home_team} (home)</option>
+          </>
+        )}
+      </select>
+    );
+
+  /** ---------- Result/Profit ---------- */
+  function betResult(b: Bet): Result {
+    const o = normalizeOverride(b.result_override);
+    if (o) return o;
+
+    if (b.bet_type === "player_prop") return { label: "Pending", tone: "neutral" };
+
+    if (b.bet_type === "parlay") {
+      const pid = b.parlay_id ?? "";
+      const legs = pid ? legsByParlayId[pid] ?? [] : [];
+      return parlayGrade(legs, gamesById);
+    }
+
+    const g = gamesById[b.game_id];
+    return calcResultLike(b.bet_type, b.selection, b.line, g);
+  }
+
+  function betProfit(b: Bet) {
+    const stakeNum = Number(b.stake ?? 0);
+    const r = betResult(b);
+
+    if (r.label === "Won") {
+      if (b.bet_type === "parlay") {
+        const pid = b.parlay_id ?? "";
+        const legs = pid ? legsByParlayId[pid] ?? [] : [];
+        const effOdds = effectiveParlayOddsForProfit(legs, gamesById, Number(b.odds ?? 0));
+        return profitFromAmericanOdds(stakeNum, effOdds);
+      }
+      return profitFromAmericanOdds(stakeNum, Number(b.odds ?? 0));
+    }
+    if (r.label === "Lost") return -stakeNum;
+    return 0;
+  }
+
+  function computeSummary(list: Bet[]): Summary {
+    return list.reduce(
+      (acc, b) => {
+        const r = betResult(b);
+        if (r.label === "Won") {
+          const p = betProfit(b);
+          acc.wins += 1;
+          acc.totalWinnings += p;
+          acc.net += p;
+        } else if (r.label === "Lost") {
+          const s = Number(b.stake ?? 0);
+          acc.losses += 1;
+          acc.totalLosses += s;
+          acc.net -= s;
+        } else if (r.label === "Push") {
+          acc.pushes += 1;
+        } else {
+          acc.pending += 1;
+        }
+        return acc;
+      },
+      { wins: 0, losses: 0, pushes: 0, pending: 0, totalWinnings: 0, totalLosses: 0, net: 0 }
+    );
+  }
+
+  const visibleBets = useMemo(() => (viewBettor === "all" ? bets : bets.filter((b) => b.bettor === viewBettor)), [bets, viewBettor]);
+
+  const summaryAll = useMemo(() => computeSummary(bets), [bets, gamesById, legsByParlayId]);
+  const summarySydney = useMemo(() => computeSummary(bets.filter((b) => b.bettor === "sydney")), [bets, gamesById, legsByParlayId]);
+  const summaryWilliam = useMemo(() => computeSummary(bets.filter((b) => b.bettor === "william")), [bets, gamesById, legsByParlayId]);
+
+  /** ---------- Add / Update / Delete ---------- */
+  async function addSingleBet(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+
+    if (!singleGameId) return setError("Please select a game.");
+    if (!singleSelection.trim()) return setError("Please choose a selection.");
+
+    if (betType !== "moneyline") {
+      const parsed = Number(singleLine);
+      if (!singleLine.trim() || Number.isNaN(parsed)) return setError("Line must be a number for spread/total.");
+    }
+
+    const stakeNum = Number(stake);
+    const oddsNum = Number(odds);
+
+    if (!stake.trim() || Number.isNaN(stakeNum) || stakeNum <= 0) return setError("Stake must be a positive number.");
+    if (!odds.trim() || Number.isNaN(oddsNum) || oddsNum === 0) return setError("Odds must be a non-zero number (e.g. -110, +150).");
+
+    const { error } = await supabase.from("bets").insert({
+      user_id: USER_ID,
+      sport: "NFL",
+      game_id: singleGameId,
+      bet_type: betType,
+      selection: singleSelection,
+      line: betType === "moneyline" ? null : Number(singleLine),
+
+      stake: stakeNum,
+      odds: oddsNum,
+      bettor,
+      parlay_id: null,
+
+      prop_player: null,
+      prop_market: null,
+      prop_side: null,
+      prop_line: null,
+      prop_notes: null,
+      result_override: null,
+    });
+
+    if (error) return setError(error.message);
+
+    setSingleLine("");
+    setBetType("total");
+    setSingleSelection("over");
+    setStake("1");
+    setOdds("-110");
+    setSingleGameId("");
+    setSingleSelectedGame(null);
+    setSingleGameSearch("");
+
+    await loadAll();
+  }
+
+  async function addPropBet(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+
+    if (!propGameId) return setError("Please select a game.");
+    if (!propPlayer.trim()) return setError("Player is required.");
+    if (!propMarket.trim()) return setError("Market is required.");
+    const ln = Number(propLine);
+    if (!propLine.trim() || Number.isNaN(ln)) return setError("Prop line must be a number.");
+
+    const stakeNum = Number(stake);
+    const oddsNum = Number(odds);
+    if (!stake.trim() || Number.isNaN(stakeNum) || stakeNum <= 0) return setError("Stake must be a positive number.");
+    if (!odds.trim() || Number.isNaN(oddsNum) || oddsNum === 0) return setError("Odds must be a non-zero number (e.g. -110, +150).");
+
+    const { error } = await supabase.from("bets").insert({
+      user_id: USER_ID,
+      sport: "NFL",
+      game_id: propGameId,
+      bet_type: "player_prop",
+      selection: "prop",
+      line: null,
+
+      stake: stakeNum,
+      odds: oddsNum,
+      bettor,
+      parlay_id: null,
+
+      prop_player: propPlayer.trim(),
+      prop_market: propMarket.trim(),
+      prop_side: propSide,
+      prop_line: ln,
+      prop_notes: propNotes.trim() ? propNotes.trim() : null,
+      result_override: "Pending",
+    });
+
+    if (error) return setError(error.message);
+
+    setStake("1");
+    setOdds("-110");
+    setPropGameId("");
+    setPropSelectedGame(null);
+    setPropGameSearch("");
+    setPropPlayer("");
+    setPropMarket("");
+    setPropSide("over");
+    setPropLine("");
+    setPropNotes("");
+    setBetType("total");
+
+    await loadAll();
+  }
+
+  function addLegToParlay() {
+    setError(null);
+
+    if (!legGameId) return setError("Pick a game for the leg.");
+    if (!legSelection.trim()) return setError("Choose a leg selection.");
+
+    if (legType !== "moneyline") {
+      const ln = Number(legLine);
+      if (!legLine.trim() || Number.isNaN(ln)) return setError("Leg line must be a number for spread/total.");
+    }
+
+    const o = Number(legOdds);
+    if (!legOdds.trim() || Number.isNaN(o) || o === 0) return setError("Leg odds must be a non-zero number.");
+
+    const tmpId = (globalThis.crypto?.randomUUID?.() ?? `tmp-${Date.now()}-${Math.random()}`).toString();
+
+    setParlayLegs((prev) => [
+      ...prev,
+      {
+        tmpId,
+        game_id: legGameId,
+        game: legSelectedGame ?? undefined,
+        leg_type: legType,
+        selection: legSelection,
+        line: legType === "moneyline" ? "" : legLine,
+        odds: legOdds,
+      },
+    ]);
+
+    setLegGameId("");
+    setLegSelectedGame(null);
+    setLegGameSearch("");
+    setLegLine("");
+    setLegSelection(legType === "total" ? "over" : "");
+    setLegOdds("-110");
+  }
+
+  async function submitParlay(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+
+    if (parlayLegs.length < 2) return setError("A parlay needs at least 2 legs.");
+
+    const stakeNum = Number(stake);
+    const oddsNum = Number(odds);
+
+    if (!stake.trim() || Number.isNaN(stakeNum) || stakeNum <= 0) return setError("Stake must be a positive number.");
+    if (!odds.trim() || Number.isNaN(oddsNum) || oddsNum === 0) return setError("Parlay odds must be a non-zero number (auto-filled, but editable).");
+
+    const parlayId = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).toString();
+
+    const { error: headerErr } = await supabase.from("bets").insert({
+      user_id: USER_ID,
+      sport: "NFL",
+      game_id: parlayId,
+      bet_type: "parlay",
+      selection: "parlay",
+      line: null,
+
+      stake: stakeNum,
+      odds: oddsNum,
+      bettor,
+      parlay_id: parlayId,
+
+      prop_player: null,
+      prop_market: null,
+      prop_side: null,
+      prop_line: null,
+      prop_notes: null,
+      result_override: null,
+    });
+
+    if (headerErr) return setError(headerErr.message);
+
+    const legsPayload = parlayLegs.map((l) => ({
+      user_id: USER_ID,
+      parlay_id: parlayId,
+      sport: "NFL",
+      game_id: l.game_id,
+      leg_type: l.leg_type,
+      selection: l.selection,
+      line: l.leg_type === "moneyline" ? null : Number(l.line),
+      odds: Number(l.odds),
+    }));
+
+    const { error: legsErr } = await supabase.from("parlay_legs").insert(legsPayload);
+    if (legsErr) return setError(legsErr.message);
+
+    setParlayLegs([]);
+    setStake("1");
+    setOdds("-110");
+    setBetType("total");
+
+    setLegType("total");
+    setLegSelection("over");
+    setLegLine("");
+    setLegOdds("-110");
+    setLegGameId("");
+    setLegSelectedGame(null);
+    setLegGameSearch("");
+
+    await loadAll();
+  }
+
+  async function updatePropGrade(betId: string, next: "Pending" | "Won" | "Lost" | "Push") {
+    setError(null);
+    const { error } = await supabase.from("bets").update({ result_override: next }).eq("id", betId).eq("user_id", USER_ID);
+    if (error) setError(error.message);
+    else await loadAll();
+  }
+
+  async function deleteBetRow(b: Bet) {
+    setError(null);
+    const ok = confirm("Delete this bet?");
+    if (!ok) return;
+
+    if (b.bet_type === "parlay" && b.parlay_id) {
+      const { error: legDelErr } = await supabase
+        .from("parlay_legs")
+        .delete()
+        .eq("parlay_id", b.parlay_id)
+        .eq("user_id", USER_ID);
+
+      if (legDelErr) return setError(`Delete legs failed: ${legDelErr.message}`);
+    }
+
+    const { data, error } = await supabase.from("bets").delete().eq("id", b.id).eq("user_id", USER_ID).select("id");
+
+    if (error) return setError(`Delete failed: ${error.message}`);
+    if (!data || data.length === 0) return setError("Delete did nothing (no row matched, or blocked by RLS).");
+
+    setBets((prev) => prev.filter((x) => x.id !== b.id));
+    await loadAll();
+  }
+
+  /** ---------- Import from screenshot ---------- */
+  async function parseScreenshot() {
+    setImportError(null);
+    if (!importFile) return setImportError("Choose a screenshot first.");
+
+    setImportLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("image", importFile);
+
+      const r = await fetch("/api/bets/parse-slip", { method: "POST", body: fd });
+      const j = await r.json();
+      if (!r.ok) return setImportError(j?.error ?? "Parse failed");
+
+      setImportResult(j);
+      setImportOpen(true);
+    } catch (e: any) {
+      setImportError(e?.message ?? "Parse failed");
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
+  async function confirmImport() {
+    if (!importResult) return;
+
+    const slip = (importResult as any).parsed;
+
+    async function insert(payload: any) {
+      const { error } = await supabase.from("bets").insert(payload);
+      if (error) throw new Error(error.message);
+    }
+
+    // Single bet / prop
+    if (slip.bet_type !== "parlay") {
+      const game_id = (importResult as any).game_id ?? null;
+      if (!game_id) throw new Error("Could not match screenshot to a game (teams/date missing or unclear).");
+
+      const common = {
+        user_id: USER_ID,
+        sport: "NFL",
+        bettor: importBettor,
+        stake: Number(slip.stake ?? 0),
+        odds: Number(slip.odds ?? 0),
+        parlay_id: null,
+      };
+
+      if (slip.bet_type === "player_prop") {
+        await insert({
+          ...common,
+          game_id,
+          bet_type: "player_prop",
+          selection: "prop",
+          line: null,
+          prop_player: slip.prop_player ?? null,
+          prop_market: slip.prop_market ?? null,
+          prop_side: slip.prop_side ?? null,
+          prop_line: slip.prop_line ?? null,
+          prop_notes: slip.sportsbook ? `Imported from ${slip.sportsbook}` : "Imported from screenshot",
+          result_override: "Pending",
+        });
+      } else {
+        await insert({
+          ...common,
+          game_id,
+          bet_type: slip.bet_type,
+          selection: slip.selection ?? "",
+          line: slip.bet_type === "moneyline" ? null : Number(slip.line ?? 0),
+          prop_player: null,
+          prop_market: null,
+          prop_side: null,
+          prop_line: null,
+          prop_notes: slip.sportsbook ? `Imported from ${slip.sportsbook}` : null,
+          result_override: null,
+        });
+      }
+
+      setImportOpen(false);
+      setImportResult(null);
+      setImportFile(null);
+      await loadAll();
+      return;
+    }
+
+    // Parlay
+    const legs = slip.legs ?? [];
+    if (legs.length < 2) throw new Error("Parsed as parlay but found <2 legs.");
+
+    const parlayId = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).toString();
+
+    const { error: headerErr } = await supabase.from("bets").insert({
+      user_id: USER_ID,
+      sport: "NFL",
+      bettor: importBettor,
+      stake: Number(slip.stake ?? 0),
+      odds: Number(slip.odds ?? 0),
+      bet_type: "parlay",
+      selection: "parlay",
+      line: null,
+      game_id: parlayId,
+      parlay_id: parlayId,
+      prop_player: null,
+      prop_market: null,
+      prop_side: null,
+      prop_line: null,
+      prop_notes: slip.sportsbook ? `Imported from ${slip.sportsbook}` : "Imported from screenshot",
+      result_override: null,
+    });
+
+    if (headerErr) throw new Error(headerErr.message);
+
+    // NOTE: current parlay_legs schema doesn't support prop legs. We skip prop legs or store them as text.
+    const legsPayload = (legs as any[]).map((l) => {
+      if (!l.game_id) throw new Error("A parlay leg could not be matched to a game.");
+      if (l.bet_type === "player_prop") {
+        return {
+          user_id: USER_ID,
+          parlay_id: parlayId,
+          sport: "NFL",
+          game_id: l.game_id,
+          leg_type: "total",
+          selection: `PROP: ${l.prop_player ?? ""} ${l.prop_market ?? ""} ${l.prop_side ?? ""} ${l.prop_line ?? ""}`.trim(),
+          line: null,
+          odds: Number(l.odds ?? -110),
+        };
+      }
+      return {
+        user_id: USER_ID,
+        parlay_id: parlayId,
+        sport: "NFL",
+        game_id: l.game_id,
+        leg_type: l.bet_type,
+        selection: l.selection ?? "",
+        line: l.bet_type === "moneyline" ? null : Number(l.line ?? 0),
+        odds: Number(l.odds ?? -110),
+      };
+    });
+
+    const { error: legsErr } = await supabase.from("parlay_legs").insert(legsPayload);
+    if (legsErr) throw new Error(legsErr.message);
+
+    setImportOpen(false);
+    setImportResult(null);
+    setImportFile(null);
+    await loadAll();
+  }
+
+  function SummaryCard({ title, s }: { title: string; s: Summary }) {
+    return (
+      <div style={{ border: "1px solid #ddd", borderRadius: 12, padding: 14, minWidth: 260 }}>
+        <div style={{ fontWeight: 900, marginBottom: 8 }}>{title}</div>
+        <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
+          <div>
+            <b>Record:</b> {s.wins}-{s.losses}-{s.pushes} <span style={{ opacity: 0.7 }}>(Pending: {s.pending})</span>
+          </div>
+          <div>
+            <b>Total Winnings:</b> ${s.totalWinnings.toFixed(2)}
+          </div>
+          <div>
+            <b>Total Losses:</b> ${s.totalLosses.toFixed(2)}
+          </div>
+          <div>
+            <b>Net:</b> <span style={{ fontWeight: 900 }}>{formatSignedMoney(s.net)}</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <main style={{ maxWidth: 900, margin: "0 auto", padding: 24, fontFamily: "system-ui" }}>
       <h1 style={{ fontSize: 28, fontWeight: 800 }}>Bet Tracker</h1>
@@ -1052,22 +1186,14 @@ export default function Page() {
             </div>
 
             <div>
-              <label style={labelStyle}>
-                {betType === "parlay" ? "Parlay odds (auto-filled, editable)" : "Odds (American)"}
-              </label>
+              <label style={labelStyle}>{betType === "parlay" ? "Parlay odds (auto-filled, editable)" : "Odds (American)"}</label>
               <input value={odds} onChange={(e) => setOdds(e.target.value)} style={inputStyle} placeholder="e.g. -110 or +600" inputMode="numeric" />
-              {betType === "parlay" && (
-                <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>Tip: Add legs below — odds will auto-calculate (still editable).</div>
-              )}
-              {betType === "player_prop" && (
-                <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
-                  Props are graded manually for now (use the grade dropdown after you add it).
-                </div>
-              )}
+              {betType === "parlay" && <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>Tip: Add legs below — odds will auto-calculate (still editable).</div>}
+              {betType === "player_prop" && <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>Props are graded manually after you add them (use the Grade dropdown).</div>}
             </div>
           </div>
 
-          {/* SINGLE BETS */}
+          {/* Singles */}
           {betType !== "parlay" && betType !== "player_prop" && (
             <form onSubmit={addSingleBet} style={{ display: "grid", gap: 12 }}>
               <div>
@@ -1090,9 +1216,7 @@ export default function Page() {
                 })}
                 <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
                   Selected:{" "}
-                  <b>
-                    {singleSelectedGame ? `${singleSelectedGame.away_team} @ ${singleSelectedGame.home_team} — ${singleSelectedGame.game_date}` : "—"}
-                  </b>
+                  <b>{singleSelectedGame ? `${singleSelectedGame.away_team} @ ${singleSelectedGame.home_team} — ${singleSelectedGame.game_date}` : "—"}</b>
                 </div>
               </div>
 
@@ -1120,7 +1244,7 @@ export default function Page() {
             </form>
           )}
 
-          {/* PLAYER PROPS */}
+          {/* Player Props */}
           {betType === "player_prop" && (
             <form onSubmit={addPropBet} style={{ display: "grid", gap: 12 }}>
               <div>
@@ -1185,7 +1309,7 @@ export default function Page() {
             </form>
           )}
 
-          {/* PARLAYS */}
+          {/* Parlays */}
           {betType === "parlay" && (
             <form onSubmit={submitParlay} style={{ display: "grid", gap: 12 }}>
               <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
@@ -1212,9 +1336,7 @@ export default function Page() {
                     })}
                     <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
                       Selected:{" "}
-                      <b>
-                        {legSelectedGame ? `${legSelectedGame.away_team} @ ${legSelectedGame.home_team} — ${legSelectedGame.game_date}` : "—"}
-                      </b>
+                      <b>{legSelectedGame ? `${legSelectedGame.away_team} @ ${legSelectedGame.home_team} — ${legSelectedGame.game_date}` : "—"}</b>
                     </div>
                   </div>
 
@@ -1279,9 +1401,7 @@ export default function Page() {
                         }}
                       >
                         <div style={{ display: "grid", gap: 2 }}>
-                          <div style={{ fontWeight: 800, fontSize: 13 }}>
-                            {l.game ? `${l.game.away_team} @ ${l.game.home_team}` : l.game_id}
-                          </div>
+                          <div style={{ fontWeight: 800, fontSize: 13 }}>{l.game ? `${l.game.away_team} @ ${l.game.home_team}` : l.game_id}</div>
                           <div style={{ fontSize: 12, opacity: 0.8 }}>
                             {l.leg_type} — {l.selection}
                             {l.leg_type === "moneyline" ? "" : ` (${l.line})`} • odds {l.odds}
@@ -1317,6 +1437,34 @@ export default function Page() {
               </button>
             </form>
           )}
+
+          {/* Import from screenshot */}
+          <div style={{ borderTop: "1px solid #eee", marginTop: 16, paddingTop: 16 }}>
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>Import from screenshot</div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <label style={labelStyle}>Who placed the bet?</label>
+                <select value={importBettor} onChange={(e) => setImportBettor(e.target.value as any)} style={inputStyle}>
+                  <option value="sydney">sydney</option>
+                  <option value="william">william</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={labelStyle}>Bet slip screenshot</label>
+                <input type="file" accept="image/*" onChange={(e) => setImportFile(e.target.files?.[0] ?? null)} style={inputStyle} />
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+              <button type="button" onClick={parseScreenshot} style={buttonStyle} disabled={importLoading}>
+                {importLoading ? "Parsing…" : "Parse Screenshot"}
+              </button>
+              {importError && <div style={{ color: "crimson" }}>{importError}</div>}
+              <div style={{ fontSize: 12, opacity: 0.7 }}>Tip: include the part of the slip showing teams, date, stake, odds, and the bet details.</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1350,7 +1498,6 @@ export default function Page() {
         ) : (
           <div style={{ display: "grid", gap: 10 }}>
             {visibleBets.map((b) => {
-              // ----- PLAYER PROP RENDER -----
               if (b.bet_type === "player_prop") {
                 const g = gamesById[b.game_id];
                 const gameLabel = g
@@ -1403,7 +1550,6 @@ export default function Page() {
                 );
               }
 
-              // ----- PARLAY RENDER -----
               if (b.bet_type === "parlay") {
                 const pid = b.parlay_id ?? "";
                 const legs = pid ? legsByParlayId[pid] ?? [] : [];
@@ -1437,7 +1583,6 @@ export default function Page() {
                         legs.map((l) => {
                           const g = gamesById[l.game_id];
                           const r = calcResultLike(l.leg_type, l.selection, l.line, g);
-
                           const label = g
                             ? `${g.away_team} @ ${g.home_team} — ${g.game_date} • ${g.away_score ?? 0}-${g.home_score ?? 0} • ${statusText(g)}`
                             : l.game_id;
@@ -1460,7 +1605,7 @@ export default function Page() {
                 );
               }
 
-              // ----- SINGLE BET RENDER -----
+              // Single bet
               const g = gamesById[b.game_id];
               const r = betResult(b);
               const profit = betProfit(b);
@@ -1496,6 +1641,56 @@ export default function Page() {
           </div>
         )}
       </div>
+
+      {/* Confirm import modal */}
+      {importOpen && importResult && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.35)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            zIndex: 50,
+          }}
+        >
+          <div style={{ background: "white", borderRadius: 14, padding: 16, maxWidth: 720, width: "100%" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div style={{ fontWeight: 900, fontSize: 16 }}>Confirm import</div>
+              <button type="button" style={deleteButtonStyle} onClick={() => setImportOpen(false)}>
+                Close
+              </button>
+            </div>
+
+            <pre style={{ marginTop: 12, padding: 12, background: "#f7f7f8", borderRadius: 12, overflowX: "auto", fontSize: 12, maxHeight: 360 }}>
+              {JSON.stringify(importResult, null, 2)}
+            </pre>
+
+            <div style={{ display: "flex", gap: 10, marginTop: 12, justifyContent: "flex-end" }}>
+              <button type="button" style={secondaryButtonStyle} onClick={() => setImportOpen(false)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                style={buttonStyle}
+                onClick={async () => {
+                  try {
+                    await confirmImport();
+                  } catch (e: any) {
+                    setImportError(e?.message ?? "Import failed");
+                  }
+                }}
+              >
+                Confirm & Add
+              </button>
+            </div>
+
+            {importError && <div style={{ color: "crimson", marginTop: 10 }}>{importError}</div>}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
