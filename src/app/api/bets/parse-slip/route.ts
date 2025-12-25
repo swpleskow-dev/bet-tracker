@@ -16,8 +16,16 @@ function ymd(d: Date) {
   return d.toISOString().slice(0, 10);
 }
 
-function addDays(dateStr: string, days: number) {
+function isISODate(s: string | null) {
+  return !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
+function addDaysSafe(dateStr: string | null, days: number) {
+  if (!isISODate(dateStr)) return null;
+
   const d = new Date(`${dateStr}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+
   d.setUTCDate(d.getUTCDate() + days);
   return ymd(d);
 }
@@ -51,8 +59,6 @@ function teamVariants(raw: string) {
   const last = parts.length > 1 ? parts[parts.length - 1] : "";
   const noSpace = s.replace(/\s+/g, "");
 
-  // Helpful for matching DEN -> DENVER, etc.
-  // (prefixes are weak but sometimes useful)
   const prefix3 = s.slice(0, 3);
   const prefix4 = s.slice(0, 4);
 
@@ -67,13 +73,6 @@ function teamVariants(raw: string) {
     noSpace.slice(0, 4),
   ]).map(escForOr);
 }
-
-type MatchDebug = {
-  input: { home: string; away: string; date: string | null };
-  pass1?: { from: string; to: string; orCount: number; found: number };
-  pass2?: { from: string; to: string; orCount: number; found: number };
-  chosen?: { game_id: string; game_date: string; home_team: string; away_team: string; score: number };
-};
 
 async function queryGames({
   from,
@@ -92,14 +91,12 @@ async function queryGames({
   const orClauses: string[] = [];
   for (const h of homePick) {
     for (const a of awayPick) {
-      // orientation
       orClauses.push(`and(home_team.ilike.%${h}%,away_team.ilike.%${a}%)`);
-      // swapped
       orClauses.push(`and(home_team.ilike.%${a}%,away_team.ilike.%${h}%)`);
     }
   }
 
-  const q = supabase
+  const { data, error } = await supabase
     .from("games")
     .select("game_id, game_date, home_team, away_team")
     .gte("game_date", from)
@@ -108,18 +105,20 @@ async function queryGames({
     .order("game_date", { ascending: false })
     .limit(50);
 
-  const { data, error } = await q;
-  if (error) return { data: null as any[] | null, error, orCount: orClauses.length };
-  return { data: (data ?? []) as any[], error: null, orCount: orClauses.length };
+  return { data: (data ?? []) as any[], error, orCount: orClauses.length };
 }
 
-function scoreCandidates(data: any[], homeVars: string[], awayVars: string[], date: string | null) {
+function scoreCandidates(
+  data: any[],
+  homeVars: string[],
+  awayVars: string[],
+  date: string | null
+) {
   const scored = data.map((g) => {
     const h = String(g.home_team ?? "").toUpperCase();
     const a = String(g.away_team ?? "").toUpperCase();
     let score = 0;
 
-    // direct
     for (const hv of homeVars) {
       if (hv && h === hv) score += 10;
       if (hv && h.includes(hv)) score += 4;
@@ -129,7 +128,6 @@ function scoreCandidates(data: any[], homeVars: string[], awayVars: string[], da
       if (av && a.includes(av)) score += 4;
     }
 
-    // swapped
     for (const hv of homeVars) {
       if (hv && a === hv) score += 7;
       if (hv && a.includes(hv)) score += 3;
@@ -139,7 +137,6 @@ function scoreCandidates(data: any[], homeVars: string[], awayVars: string[], da
       if (av && h.includes(av)) score += 3;
     }
 
-    // date exact match bonus (if we have date)
     if (date && String(g.game_date).slice(0, 10) === date) score += 12;
 
     return { g, score };
@@ -150,80 +147,67 @@ function scoreCandidates(data: any[], homeVars: string[], awayVars: string[], da
 }
 
 /**
- * Two-pass game match:
- * Pass 1: if date provided, search date-1 .. date+1
- * Pass 2: if no results, search wide window (last 365 .. next 365)
+ * Match a game_id from parsed game info (home/away/date).
+ * Safe against missing or non-ISO dates (prevents "Invalid time value").
  */
-async function matchGameIdFromParsedGame(game: any): Promise<{ game_id: string | null; debug: MatchDebug }> {
+async function matchGameIdFromParsedGame(game: any): Promise<string | null> {
   const homeRaw = norm(game?.home_team);
   const awayRaw = norm(game?.away_team);
-  const date = norm(game?.game_date).slice(0, 10) || null;
 
-  const debug: MatchDebug = {
-    input: { home: homeRaw, away: awayRaw, date },
-  };
+  const dateRaw = norm(game?.game_date) || null;
+  const date = isISODate(dateRaw) ? dateRaw : null;
 
-  if (!homeRaw || !awayRaw) return { game_id: null, debug };
+  if (!homeRaw || !awayRaw) return null;
 
   const homeVars = teamVariants(homeRaw);
   const awayVars = teamVariants(awayRaw);
 
-  // PASS 1: tight date window if date exists
+  // PASS 1: tight date window (date ± 1 day) only if date is valid ISO
   if (date) {
-    const from = addDays(date, -1);
-    const to = addDays(date, +1);
+    const from = addDaysSafe(date, -1);
+    const to = addDaysSafe(date, +1);
 
-    const r1 = await queryGames({ from, to, homeVars, awayVars });
-    debug.pass1 = { from, to, orCount: r1.orCount, found: r1.data?.length ?? 0 };
-
-    if (r1.data && r1.data.length > 0) {
-      const scored = scoreCandidates(r1.data, homeVars, awayVars, date);
-      const best = scored[0];
-      if (best?.g?.game_id) {
-        debug.chosen = {
-          game_id: best.g.game_id,
-          game_date: best.g.game_date,
-          home_team: best.g.home_team,
-          away_team: best.g.away_team,
-          score: best.score,
-        };
-        return { game_id: best.g.game_id, debug };
+    if (from && to) {
+      const r1 = await queryGames({ from, to, homeVars, awayVars });
+      if (!r1.error && r1.data && r1.data.length > 0) {
+        const scored = scoreCandidates(r1.data, homeVars, awayVars, date);
+        const best = scored[0];
+        return best?.g?.game_id ?? null;
       }
     }
   }
 
-  // PASS 2: wide window (ignore date mismatches)
+  // PASS 2: wide window (ignore date)
   const wideFrom = ymd(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
   const wideTo = ymd(new Date(Date.now() + 365 * 24 * 60 * 60 * 1000));
 
   const r2 = await queryGames({ from: wideFrom, to: wideTo, homeVars, awayVars });
-  debug.pass2 = { from: wideFrom, to: wideTo, orCount: r2.orCount, found: r2.data?.length ?? 0 };
-
-  if (r2.data && r2.data.length > 0) {
+  if (!r2.error && r2.data && r2.data.length > 0) {
     const scored = scoreCandidates(r2.data, homeVars, awayVars, date);
     const best = scored[0];
-    if (best?.g?.game_id) {
-      debug.chosen = {
-        game_id: best.g.game_id,
-        game_date: best.g.game_date,
-        home_team: best.g.home_team,
-        away_team: best.g.away_team,
-        score: best.score,
-      };
-      return { game_id: best.g.game_id, debug };
-    }
+    return best?.g?.game_id ?? null;
   }
 
-  return { game_id: null, debug };
+  return null;
 }
 
-// STRICT schema: every object has required and includes all keys.
+/**
+ * IMPORTANT: OpenAI strict JSON schema requires:
+ * - every object has `required`
+ * - `required` includes EVERY key in `properties`
+ * Optional fields are represented by allowing null.
+ */
 const betSlipSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
     sport: { type: "string", enum: ["NFL"] },
-    bet_type: { type: "string", enum: ["moneyline", "spread", "total", "player_prop", "parlay"] },
+
+    bet_type: {
+      type: "string",
+      enum: ["moneyline", "spread", "total", "player_prop", "parlay"],
+    },
+
     stake: { type: ["number", "null"] },
     odds: { type: ["number", "null"] },
 
@@ -252,7 +236,11 @@ const betSlipSchema = {
         type: "object",
         additionalProperties: false,
         properties: {
-          bet_type: { type: "string", enum: ["moneyline", "spread", "total", "player_prop"] },
+          bet_type: {
+            type: "string",
+            enum: ["moneyline", "spread", "total", "player_prop"],
+          },
+
           selection: { type: ["string", "null"] },
           line: { type: ["number", "null"] },
           odds: { type: ["number", "null"] },
@@ -290,6 +278,7 @@ const betSlipSchema = {
     sportsbook: { type: ["string", "null"] },
     confidence: { type: ["number", "null"] },
   },
+
   required: [
     "sport",
     "bet_type",
@@ -311,14 +300,20 @@ const betSlipSchema = {
 export async function POST(req: Request) {
   try {
     if (!OPENAI_API_KEY) {
-      return NextResponse.json({ error: "Server misconfigured: OPENAI_API_KEY is missing." }, { status: 500 });
+      return NextResponse.json(
+        { error: "Server misconfigured: OPENAI_API_KEY is missing." },
+        { status: 500 }
+      );
     }
 
     const fd = await req.formData();
     const image = fd.get("image");
 
     if (!image || !(image instanceof File)) {
-      return NextResponse.json({ error: "Missing image file (field name: image)." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Missing image file (field name: image)." },
+        { status: 400 }
+      );
     }
 
     const dataUrl = await fileToDataUrl(image);
@@ -329,8 +324,9 @@ Parse this sportsbook bet slip screenshot into structured JSON for an NFL bet tr
 Strict rules:
 - Output MUST match the provided JSON schema exactly.
 - DO NOT omit any fields. If unknown/not visible, set the field to null.
-- If the slip shows matchup/date once, reuse top-level game for legs.
-`.trim();
+- If the slip shows matchup/date once, reuse the top-level game object for legs.
+- Use YYYY-MM-DD when you can, otherwise set game_date to null.
+    `.trim();
 
     const openaiRes = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -371,10 +367,19 @@ Strict rules:
         ? await openaiRes.json().catch(() => null)
         : await openaiRes.text().catch(() => null);
 
-      console.error("OPENAI ERROR", { status: openaiRes.status, requestId, body });
+      console.error("OPENAI ERROR", {
+        status: openaiRes.status,
+        requestId,
+        body,
+      });
 
       return NextResponse.json(
-        { error: "OpenAI request failed", status: openaiRes.status, requestId, body },
+        {
+          error: "OpenAI request failed",
+          status: openaiRes.status,
+          requestId,
+          body,
+        },
         { status: 500 }
       );
     }
@@ -383,13 +388,17 @@ Strict rules:
 
     const outputText: string | null =
       responseJson?.output_text ??
-      responseJson?.output?.[0]?.content?.find((c: any) => c?.type === "output_text")?.text ??
+      responseJson?.output?.[0]?.content?.find((c: any) => c?.type === "output_text")
+        ?.text ??
       responseJson?.output?.[0]?.content?.[0]?.text ??
       null;
 
     if (!outputText || typeof outputText !== "string") {
       return NextResponse.json(
-        { error: "OpenAI response did not include output_text.", debug: { keys: Object.keys(responseJson ?? {}) } },
+        {
+          error: "OpenAI response did not include output_text.",
+          debug: { keys: Object.keys(responseJson ?? {}) },
+        },
         { status: 500 }
       );
     }
@@ -398,28 +407,27 @@ Strict rules:
     try {
       parsed = JSON.parse(outputText);
     } catch {
-      return NextResponse.json({ error: "Model output was not valid JSON.", raw: outputText }, { status: 500 });
+      return NextResponse.json(
+        { error: "Model output was not valid JSON.", raw: outputText },
+        { status: 500 }
+      );
     }
 
-    // Match top-level game_id
-    const topMatch = await matchGameIdFromParsedGame(parsed?.game);
-    const topGameId = topMatch.game_id;
+    // Match a top-level game_id if possible
+    const topGameId = await matchGameIdFromParsedGame(parsed?.game);
 
-    // Match legs; fallback to top-level game; inherit topGameId if still null
+    // For parlay legs:
+    // - Prefer leg.game if present, otherwise use top-level parsed.game
+    // - If still can't match, inherit topGameId so import doesn't fail
     if (Array.isArray(parsed?.legs)) {
       const legsWithIds = [];
       for (const leg of parsed.legs) {
         const legGameObj = leg?.game ?? parsed?.game ?? null;
-        const legMatch = await matchGameIdFromParsedGame(legGameObj);
 
-        let legGameId = legMatch.game_id;
+        let legGameId = await matchGameIdFromParsedGame(legGameObj);
         if (!legGameId && topGameId) legGameId = topGameId;
 
-        legsWithIds.push({
-          ...leg,
-          game: legGameObj,
-          game_id: legGameId ?? null,
-        });
+        legsWithIds.push({ ...leg, game: legGameObj, game_id: legGameId ?? null });
       }
       parsed.legs = legsWithIds;
     }
@@ -427,10 +435,6 @@ Strict rules:
     return NextResponse.json({
       parsed,
       game_id: topGameId ?? null,
-      debug_match: {
-        top: topMatch.debug,
-        // legs debug is omitted to keep response small; you can add it if you want
-      },
     });
   } catch (e: any) {
     console.error("parse-slip route error", e);
