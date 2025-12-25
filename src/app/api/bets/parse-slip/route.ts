@@ -2,7 +2,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-// Ensure Node runtime (Edge can be limited for File/Buffer)
 export const runtime = "nodejs";
 
 const supabase = createClient(
@@ -29,17 +28,62 @@ function norm(s: any) {
   return String(s ?? "").trim();
 }
 
+function uniq(arr: string[]) {
+  return Array.from(new Set(arr.filter(Boolean)));
+}
+
 /**
- * Match a game row by parsed game info (home/away/date) using a fuzzy ilike search.
+ * Build fuzzy tokens from a team label like:
+ * "DEN BRONCOS" -> ["DEN BRONCOS","DEN","BRONCOS","DENB","BRO"]
+ * "KC CHIEFS" -> ["KC CHIEFS","KC","CHIEFS","KCC","CHI"]
+ */
+function teamVariants(raw: string) {
+  const s = norm(raw).toUpperCase().replace(/\s+/g, " ").trim();
+  if (!s) return [];
+
+  const parts = s.split(" ").filter(Boolean);
+
+  const first = parts[0] ?? "";
+  const last = parts.length > 1 ? parts[parts.length - 1] : "";
+
+  // a few extra “weak” variants that often help
+  const noSpace = s.replace(/\s+/g, "");
+  const prefix3 = s.slice(0, 3);
+  const prefix4 = s.slice(0, 4);
+
+  return uniq([
+    s,
+    first,
+    last,
+    prefix3,
+    prefix4,
+    noSpace.length >= 3 ? noSpace.slice(0, 3) : "",
+    noSpace.length >= 4 ? noSpace.slice(0, 4) : "",
+  ]);
+}
+
+/**
+ * Escape values for Supabase filter strings (very simple, avoids breaking the query)
+ */
+function escForOr(v: string) {
+  return v.replace(/[%,"\\]/g, "");
+}
+
+/**
+ * Match a game row by parsed game info (home/away/date) using fuzzy ilike search.
  * Returns best match game_id or null.
  */
 async function matchGameIdFromParsedGame(game: any) {
-  const home = norm(game?.home_team).toUpperCase();
-  const away = norm(game?.away_team).toUpperCase();
+  const homeRaw = norm(game?.home_team);
+  const awayRaw = norm(game?.away_team);
   const date = norm(game?.game_date).slice(0, 10);
 
-  if (!home || !away) return null;
+  if (!homeRaw || !awayRaw) return null;
 
+  const homeVars = teamVariants(homeRaw).map(escForOr);
+  const awayVars = teamVariants(awayRaw).map(escForOr);
+
+  // If date missing, search a reasonable window
   const from = date
     ? date
     : ymd(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
@@ -47,40 +91,59 @@ async function matchGameIdFromParsedGame(game: any) {
     ? date
     : ymd(new Date(Date.now() + 365 * 24 * 60 * 60 * 1000));
 
+  // Build OR filter that works for swapped home/away too.
+  // We use a couple variants to be robust to abbreviations vs full names.
+  const homePick = homeVars.slice(0, 3);
+  const awayPick = awayVars.slice(0, 3);
+
+  const orClauses: string[] = [];
+  for (const h of homePick) {
+    for (const a of awayPick) {
+      orClauses.push(`and(home_team.ilike.%${h}%,away_team.ilike.%${a}%)`);
+      orClauses.push(`and(home_team.ilike.%${a}%,away_team.ilike.%${h}%)`);
+    }
+  }
+
   const { data, error } = await supabase
     .from("games")
     .select("game_id, game_date, home_team, away_team")
     .gte("game_date", from)
     .lte("game_date", to)
-    .or(
-      `and(home_team.ilike.%${home}%,away_team.ilike.%${away}%),and(home_team.ilike.%${away}%,away_team.ilike.%${home}%)`
-    )
+    .or(orClauses.join(","))
     .order("game_date", { ascending: false })
     .limit(25);
 
   if (error) return null;
   if (!data || data.length === 0) return null;
 
+  // Score candidates: exact + contains + date match.
   const scored = data.map((g: any) => {
     const h = String(g.home_team ?? "").toUpperCase();
     const a = String(g.away_team ?? "").toUpperCase();
 
     let score = 0;
 
-    // direct orientation
-    if (h === home) score += 6;
-    if (a === away) score += 6;
-    if (h.includes(home)) score += 3;
-    if (a.includes(away)) score += 3;
+    // reward exact match on any variant
+    for (const hv of homeVars) {
+      if (hv && h === hv) score += 10;
+      if (hv && h.includes(hv)) score += 4;
+    }
+    for (const av of awayVars) {
+      if (av && a === av) score += 10;
+      if (av && a.includes(av)) score += 4;
+    }
 
-    // swapped orientation
-    if (h === away) score += 6;
-    if (a === home) score += 6;
-    if (h.includes(away)) score += 3;
-    if (a.includes(home)) score += 3;
+    // also reward swapped matches (some sources flip)
+    for (const hv of homeVars) {
+      if (hv && a === hv) score += 7;
+      if (hv && a.includes(hv)) score += 3;
+    }
+    for (const av of awayVars) {
+      if (av && h === av) score += 7;
+      if (av && h.includes(av)) score += 3;
+    }
 
-    // exact date match helps
-    if (date && String(g.game_date) === date) score += 8;
+    if (date && String(g.game_date) === date) score += 12;
 
     return { g, score };
   });
@@ -90,48 +153,42 @@ async function matchGameIdFromParsedGame(game: any) {
 }
 
 /**
- * IMPORTANT: OpenAI strict JSON schema requires:
- * - Every object schema must have `required`
- * - `required` must include EVERY key in `properties`
- * Optionality is represented by allowing `null` in the type, not by omitting the key.
+ * OpenAI strict JSON schema requires:
+ * - objects must have `required`
+ * - required must include EVERY key in properties
+ * Optionality is represented by allowing null.
  */
 const betSlipSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
     sport: { type: "string", enum: ["NFL"] },
-
     bet_type: {
       type: "string",
       enum: ["moneyline", "spread", "total", "player_prop", "parlay"],
     },
-
     stake: { type: ["number", "null"] },
     odds: { type: ["number", "null"] },
 
-    // singles (moneyline/spread/total)
     selection: { type: ["string", "null"] },
     line: { type: ["number", "null"] },
 
-    // props
     prop_player: { type: ["string", "null"] },
     prop_market: { type: ["string", "null"] },
-    prop_side: { type: ["string", "null"] }, // "over" | "under"
+    prop_side: { type: ["string", "null"] },
     prop_line: { type: ["number", "null"] },
 
-    // game info for matching
     game: {
       type: ["object", "null"],
       additionalProperties: false,
       properties: {
-        game_date: { type: ["string", "null"] }, // ideally YYYY-MM-DD
+        game_date: { type: ["string", "null"] },
         home_team: { type: ["string", "null"] },
         away_team: { type: ["string", "null"] },
       },
       required: ["game_date", "home_team", "away_team"],
     },
 
-    // parlay legs
     legs: {
       type: ["array", "null"],
       items: {
@@ -142,7 +199,6 @@ const betSlipSchema = {
             type: "string",
             enum: ["moneyline", "spread", "total", "player_prop"],
           },
-
           selection: { type: ["string", "null"] },
           line: { type: ["number", "null"] },
           odds: { type: ["number", "null"] },
@@ -180,8 +236,6 @@ const betSlipSchema = {
     sportsbook: { type: ["string", "null"] },
     confidence: { type: ["number", "null"] },
   },
-
-  // REQUIRED must include every top-level property key
   required: [
     "sport",
     "bet_type",
@@ -222,34 +276,33 @@ export async function POST(req: Request) {
     const dataUrl = await fileToDataUrl(image);
 
     const prompt = `
-You are parsing a sportsbook bet slip screenshot into structured data for an NFL bet tracker.
+Parse this sportsbook bet slip screenshot into structured JSON for an NFL bet tracker.
 
-Rules:
+Strict rules:
 - Output MUST match the provided JSON schema exactly.
-- DO NOT omit fields: if a field isn't visible, set it to null.
+- DO NOT omit any fields. If unknown/not visible, set the field to null.
 - bet_type must be one of: moneyline | spread | total | player_prop | parlay
 
 Singles:
-- total: selection is "over" or "under", line is the total number.
-- spread: selection is the team name, line is the spread number (e.g. -3.5).
-- moneyline: selection is the team name, line must be null.
+- total: selection="over"/"under", line=total number.
+- spread: selection=team name, line=spread (e.g. -3.5).
+- moneyline: selection=team name, line=null.
 
 Player props:
-- bet_type = "player_prop"
+- bet_type="player_prop"
 - fill prop_player, prop_market, prop_side ("over"/"under"), prop_line
-- selection and line can be null (still must exist)
+- selection and line still must exist (use null if not applicable)
 
 Parlay:
-- bet_type = "parlay"
-- fill legs[] with each leg. Put overall stake/odds for the parlay if visible.
-- For leg bet_type="player_prop" fill prop_* fields.
+- bet_type="parlay"
+- fill legs[]; include each leg’s bet_type/selection/line/odds and any prop_* if a prop leg.
+- IMPORTANT: try hard to populate leg.game (home_team/away_team/game_date) for each leg if the slip shows it.
+- If the slip only shows the matchup once, use the top-level game object and reuse it for leg.game.
 
-Game matching:
-- If visible, populate game.home_team, game.away_team, game.game_date (YYYY-MM-DD if possible).
-- For each parlay leg, try to populate leg.game similarly.
-
-Remember: all fields must appear; use null if unknown.
-    `.trim();
+Teams/dates:
+- Use team abbreviations if that’s what you see on the slip (e.g. "DEN", "KC").
+- game_date should be YYYY-MM-DD if possible.
+`.trim();
 
     const openaiRes = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -297,23 +350,16 @@ Remember: all fields must appear; use null if unknown.
       });
 
       return NextResponse.json(
-        {
-          error: "OpenAI request failed",
-          status: openaiRes.status,
-          requestId,
-          body,
-        },
+        { error: "OpenAI request failed", status: openaiRes.status, requestId, body },
         { status: 500 }
       );
     }
 
     const responseJson = await openaiRes.json();
 
-    // Try common response shapes for Responses API
     const outputText: string | null =
       responseJson?.output_text ??
-      responseJson?.output?.[0]?.content?.find((c: any) => c?.type === "output_text")
-        ?.text ??
+      responseJson?.output?.[0]?.content?.find((c: any) => c?.type === "output_text")?.text ??
       responseJson?.output?.[0]?.content?.[0]?.text ??
       null;
 
@@ -337,15 +383,16 @@ Remember: all fields must appear; use null if unknown.
       );
     }
 
-    // Match top-level game_id for single bet / prop if possible
+    // Match top-level game_id (helps singles/props and also helps parlay fallback)
     const topGameId = await matchGameIdFromParsedGame(parsed?.game);
 
-    // For parlay legs: attempt to match each leg to a game_id
+    // For parlay legs: if a leg.game is missing/null, fall back to the top-level parsed.game
     if (Array.isArray(parsed?.legs)) {
       const legsWithIds = [];
       for (const leg of parsed.legs) {
-        const legGameId = await matchGameIdFromParsedGame(leg?.game);
-        legsWithIds.push({ ...leg, game_id: legGameId });
+        const legGameObj = leg?.game ?? parsed?.game ?? null;
+        const legGameId = await matchGameIdFromParsedGame(legGameObj);
+        legsWithIds.push({ ...leg, game: legGameObj, game_id: legGameId });
       }
       parsed.legs = legsWithIds;
     }
@@ -356,9 +403,6 @@ Remember: all fields must appear; use null if unknown.
     });
   } catch (e: any) {
     console.error("parse-slip route error", e);
-    return NextResponse.json(
-      { error: e?.message ?? "unknown" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: e?.message ?? "unknown" }, { status: 500 });
   }
 }
