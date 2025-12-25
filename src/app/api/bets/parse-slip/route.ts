@@ -32,21 +32,14 @@ function uniq(arr: string[]) {
   return Array.from(new Set(arr.filter(Boolean)));
 }
 
-/**
- * Build fuzzy tokens from a team label like:
- * "DEN BRONCOS" -> ["DEN BRONCOS","DEN","BRONCOS","DENB","BRO"]
- * "KC CHIEFS" -> ["KC CHIEFS","KC","CHIEFS","KCC","CHI"]
- */
 function teamVariants(raw: string) {
   const s = norm(raw).toUpperCase().replace(/\s+/g, " ").trim();
   if (!s) return [];
 
   const parts = s.split(" ").filter(Boolean);
-
   const first = parts[0] ?? "";
   const last = parts.length > 1 ? parts[parts.length - 1] : "";
 
-  // a few extra “weak” variants that often help
   const noSpace = s.replace(/\s+/g, "");
   const prefix3 = s.slice(0, 3);
   const prefix4 = s.slice(0, 4);
@@ -62,17 +55,10 @@ function teamVariants(raw: string) {
   ]);
 }
 
-/**
- * Escape values for Supabase filter strings (very simple, avoids breaking the query)
- */
 function escForOr(v: string) {
   return v.replace(/[%,"\\]/g, "");
 }
 
-/**
- * Match a game row by parsed game info (home/away/date) using fuzzy ilike search.
- * Returns best match game_id or null.
- */
 async function matchGameIdFromParsedGame(game: any) {
   const homeRaw = norm(game?.home_team);
   const awayRaw = norm(game?.away_team);
@@ -83,7 +69,6 @@ async function matchGameIdFromParsedGame(game: any) {
   const homeVars = teamVariants(homeRaw).map(escForOr);
   const awayVars = teamVariants(awayRaw).map(escForOr);
 
-  // If date missing, search a reasonable window
   const from = date
     ? date
     : ymd(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
@@ -91,8 +76,6 @@ async function matchGameIdFromParsedGame(game: any) {
     ? date
     : ymd(new Date(Date.now() + 365 * 24 * 60 * 60 * 1000));
 
-  // Build OR filter that works for swapped home/away too.
-  // We use a couple variants to be robust to abbreviations vs full names.
   const homePick = homeVars.slice(0, 3);
   const awayPick = awayVars.slice(0, 3);
 
@@ -116,14 +99,11 @@ async function matchGameIdFromParsedGame(game: any) {
   if (error) return null;
   if (!data || data.length === 0) return null;
 
-  // Score candidates: exact + contains + date match.
   const scored = data.map((g: any) => {
     const h = String(g.home_team ?? "").toUpperCase();
     const a = String(g.away_team ?? "").toUpperCase();
-
     let score = 0;
 
-    // reward exact match on any variant
     for (const hv of homeVars) {
       if (hv && h === hv) score += 10;
       if (hv && h.includes(hv)) score += 4;
@@ -133,7 +113,6 @@ async function matchGameIdFromParsedGame(game: any) {
       if (av && a.includes(av)) score += 4;
     }
 
-    // also reward swapped matches (some sources flip)
     for (const hv of homeVars) {
       if (hv && a === hv) score += 7;
       if (hv && a.includes(hv)) score += 3;
@@ -144,7 +123,6 @@ async function matchGameIdFromParsedGame(game: any) {
     }
 
     if (date && String(g.game_date) === date) score += 12;
-
     return { g, score };
   });
 
@@ -153,10 +131,7 @@ async function matchGameIdFromParsedGame(game: any) {
 }
 
 /**
- * OpenAI strict JSON schema requires:
- * - objects must have `required`
- * - required must include EVERY key in properties
- * Optionality is represented by allowing null.
+ * STRICT schema: every object has required, required includes every property key.
  */
 const betSlipSchema = {
   type: "object",
@@ -283,24 +258,13 @@ Strict rules:
 - DO NOT omit any fields. If unknown/not visible, set the field to null.
 - bet_type must be one of: moneyline | spread | total | player_prop | parlay
 
-Singles:
-- total: selection="over"/"under", line=total number.
-- spread: selection=team name, line=spread (e.g. -3.5).
-- moneyline: selection=team name, line=null.
-
-Player props:
-- bet_type="player_prop"
-- fill prop_player, prop_market, prop_side ("over"/"under"), prop_line
-- selection and line still must exist (use null if not applicable)
-
 Parlay:
 - bet_type="parlay"
-- fill legs[]; include each leg’s bet_type/selection/line/odds and any prop_* if a prop leg.
-- IMPORTANT: try hard to populate leg.game (home_team/away_team/game_date) for each leg if the slip shows it.
-- If the slip only shows the matchup once, use the top-level game object and reuse it for leg.game.
+- Fill legs[].
+- If the slip only shows matchup/date once, reuse the top-level game object for leg.game.
 
 Teams/dates:
-- Use team abbreviations if that’s what you see on the slip (e.g. "DEN", "KC").
+- Use abbreviations if that’s what appears (e.g. "DEN", "KC").
 - game_date should be YYYY-MM-DD if possible.
 `.trim();
 
@@ -383,23 +347,30 @@ Teams/dates:
       );
     }
 
-    // Match top-level game_id (helps singles/props and also helps parlay fallback)
+    // Match a top-level game_id (very useful fallback)
     const topGameId = await matchGameIdFromParsedGame(parsed?.game);
 
-    // For parlay legs: if a leg.game is missing/null, fall back to the top-level parsed.game
+    // For legs:
+    // - Prefer leg.game if present
+    // - else fallback to top-level parsed.game
+    // - If still can't match, inherit topGameId (if present) so import doesn't fail
     if (Array.isArray(parsed?.legs)) {
       const legsWithIds = [];
       for (const leg of parsed.legs) {
         const legGameObj = leg?.game ?? parsed?.game ?? null;
-        const legGameId = await matchGameIdFromParsedGame(legGameObj);
-        legsWithIds.push({ ...leg, game: legGameObj, game_id: legGameId });
+        let legGameId = await matchGameIdFromParsedGame(legGameObj);
+
+        // ✅ KEY CHANGE: if leg match fails but top matched, inherit topGameId
+        if (!legGameId && topGameId) legGameId = topGameId;
+
+        legsWithIds.push({ ...leg, game: legGameObj, game_id: legGameId ?? null });
       }
       parsed.legs = legsWithIds;
     }
 
     return NextResponse.json({
       parsed,
-      game_id: topGameId,
+      game_id: topGameId ?? null,
     });
   } catch (e: any) {
     console.error("parse-slip route error", e);
