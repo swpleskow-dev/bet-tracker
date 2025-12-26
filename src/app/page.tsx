@@ -1756,95 +1756,94 @@ if (!r.ok) {
           <div style={{ fontWeight: 900, marginBottom: 8 }}>Parlay legs</div>
 
           <div style={{ display: "grid", gap: 10 }}>
-            {importDraft.legs.map((leg: any, idx: number) => {
-              const needsGame = !leg.game_id;
+            {importDraft.legs.map((leg: any, idx: number) => (
+  <div key={idx} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        gap: 10,
+        alignItems: "center",
+        flexWrap: "wrap",
+      }}
+    >
+      <div style={{ fontWeight: 800 }}>
+        {leg.bet_type} — {leg.selection ?? ""}
+        {leg.line != null ? ` (${leg.line})` : ""} • odds {leg.odds ?? "—"}
+      </div>
 
-              return (
-                <div key={idx} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    <div style={{ fontWeight: 800 }}>
-                      {leg.bet_type} — {leg.selection ?? ""}
-                      {leg.line != null ? ` (${leg.line})` : ""} • odds {leg.odds ?? "—"}
-                    </div>
-
-                    <div style={{ fontSize: 12, fontWeight: 800, color: needsGame ? "crimson" : "green" }}>
-                      {needsGame ? "Needs game selected" : "Game linked"}
-                    </div>
-                  </div>
-
-                  {/* Game picker */}
-<div style={{ marginTop: 10 }}>
-  <label style={{ fontSize: 12, opacity: 0.7, marginBottom: 4, display: "block" }}>
-    Select the correct game for this leg
-  </label>
-
-  <input
-    value={importLegSearchText[idx] ?? ""}
-    onChange={(e) => searchGamesForLeg(idx, e.target.value)}
-    placeholder="Search team (DAL, Cowboys, Lions, DET...)"
-    style={inputStyle}
-  />
-
-  {/* 🔴 SHOW SEARCH ERROR HERE */}
-  {importLegSearchError[idx] && (
-    <div style={{ marginTop: 6, fontSize: 12, color: "crimson" }}>
-      {importLegSearchError[idx]}
+      <div style={{ fontSize: 12, fontWeight: 800, color: !leg.game_id ? "crimson" : "green" }}>
+        {!leg.game_id ? "Needs game selected" : "Game linked"}
+      </div>
     </div>
-  )}
 
-  {(importLegSearchOpen[idx] ?? false) && (
-    <div style={dropdownStyle}>
-      {importLegSearchLoading[idx] ? (
-        <div style={rowStyle}>Searching…</div>
-      ) : (importLegSearchText[idx] ?? "").trim().length < 2 ? (
-        <div style={rowStyle}>Type at least 2 characters…</div>
-      ) : (importLegSearchResults[idx] ?? []).length === 0 ? (
-        <div style={rowStyle}>No matches</div>
-      ) : (
-        (importLegSearchResults[idx] ?? []).map((g) => (
-          <div
-            key={g.game_id}
-            style={rowStyle}
-            onClick={() => {
-              updateImportLeg(idx, {
-                game_id: g.game_id,
-                game: {
-                  game_date: g.game_date,
-                  home_team: g.home_team,
-                  away_team: g.away_team,
-                },
-              });
-              setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
-              setImportLegSearchText((p) => ({
-                ...p,
-                [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}`,
-              }));
-            }}
-          >
-            <div style={{ fontWeight: 700 }}>
-              {g.away_team} @ {g.home_team}
-            </div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>
-              {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} •{" "}
-              {statusText(g)}
-            </div>
-          </div>
-        ))
-      )}
-    </div>
-  )}
+    <div style={{ marginTop: 10 }}>
+      <label style={{ fontSize: 12, opacity: 0.7, marginBottom: 4, display: "block" }}>
+        Select the correct game for this leg
+      </label>
 
-  {leg.game_id && (
-    <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-      Linked game_id: <b>{leg.game_id}</b>
-    </div>
-  )}
-</div>
-);
-            })}
-          </div>
+      <input
+        value={importLegSearchText[idx] ?? ""}
+        onChange={(e) => searchGamesForLeg(idx, e.target.value)}
+        placeholder="Search team (DAL, Cowboys, Lions, DET...)"
+        style={inputStyle}
+      />
+
+      {importLegSearchError[idx] && (
+        <div style={{ marginTop: 6, fontSize: 12, color: "crimson" }}>
+          {importLegSearchError[idx]}
         </div>
       )}
+
+      {(importLegSearchOpen[idx] ?? false) && (
+        <div style={dropdownStyle}>
+          {importLegSearchLoading[idx] ? (
+            <div style={rowStyle}>Searching…</div>
+          ) : (importLegSearchText[idx] ?? "").trim().length < 2 ? (
+            <div style={rowStyle}>Type at least 2 characters…</div>
+          ) : (importLegSearchResults[idx] ?? []).length === 0 ? (
+            <div style={rowStyle}>No matches</div>
+          ) : (
+            (importLegSearchResults[idx] ?? []).map((g) => (
+              <div
+                key={g.game_id}
+                style={rowStyle}
+                onClick={() => {
+                  updateImportLeg(idx, {
+                    game_id: g.game_id,
+                    game: {
+                      game_date: g.game_date,
+                      home_team: g.home_team,
+                      away_team: g.away_team,
+                    },
+                  });
+                  setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
+                  setImportLegSearchText((p) => ({
+                    ...p,
+                    [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}`,
+                  }));
+                }}
+              >
+                <div style={{ fontWeight: 700 }}>
+                  {g.away_team} @ {g.home_team}
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>
+                  {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} • {statusText(g)}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {leg.game_id && (
+        <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+          Linked game_id: <b>{leg.game_id}</b>
+        </div>
+      )}
+    </div>
+  </div>
+))}
 
       <pre
         style={{
