@@ -1702,7 +1702,8 @@ if (!r.ok) {
       </div>
 
       {/* Confirm import modal */}
-      {importOpen && importResult && importDraft && (
+      {/* Confirm import modal */}
+{importOpen && importResult && importDraft && (
   <div
     style={{
       position: "fixed",
@@ -1752,7 +1753,6 @@ if (!r.ok) {
                     </div>
                   </div>
 
-                  {/* Game picker */}
                   <div style={{ marginTop: 10 }}>
                     <label style={{ fontSize: 12, opacity: 0.7, marginBottom: 4, display: "block" }}>
                       Select the correct game for this leg
@@ -1779,7 +1779,6 @@ if (!r.ok) {
                               key={g.game_id}
                               style={rowStyle}
                               onClick={() => {
-                                // set leg.game_id + also store leg.game info
                                 updateImportLeg(idx, {
                                   game_id: g.game_id,
                                   game: { game_date: g.game_date, home_team: g.home_team, away_team: g.away_team },
@@ -1813,7 +1812,6 @@ if (!r.ok) {
         </div>
       )}
 
-      {/* Raw JSON preview (optional but handy) */}
       <pre
         style={{
           marginTop: 12,
@@ -1845,7 +1843,6 @@ if (!r.ok) {
           style={buttonStyle}
           onClick={async () => {
             try {
-              // Block saving if parlay legs still missing game_id
               if (importDraft?.bet_type === "parlay" && Array.isArray(importDraft.legs)) {
                 const missing = importDraft.legs.findIndex((l: any) => !l.game_id);
                 if (missing !== -1) {
@@ -1854,10 +1851,8 @@ if (!r.ok) {
                 }
               }
 
-              // IMPORTANT: use importDraft instead of importResult.parsed
-              // We'll temporarily swap importResult.parsed so your existing confirmImport() works.
-              const temp = importResult;
-              (temp as any).parsed = importDraft;
+              // use importDraft by temporarily swapping importResult.parsed
+              const temp: any = { ...importResult, parsed: importDraft };
               setImportResult(temp);
 
               await confirmImport();
@@ -1873,11 +1868,10 @@ if (!r.ok) {
       {importError && <div style={{ color: "crimson", marginTop: 10 }}>{importError}</div>}
     </div>
   </div>
-  </main>
+)}
+    </main>
   );
 }
-
-
 
 /* styles */
 const labelStyle: React.CSSProperties = {
