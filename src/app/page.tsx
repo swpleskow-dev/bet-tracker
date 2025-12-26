@@ -1797,7 +1797,7 @@ value={importLegSearchText[idx] ?? ""}
                               </div>
                             </div>
                           ))
-                        )}
+                        
                       </div>
                     )}
 
