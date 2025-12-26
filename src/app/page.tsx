@@ -1775,7 +1775,7 @@ if (!r.ok) {
                         </div>
                       </div>
 
-                      <div style={{ marginTop: 10 }}>
+<div style={{ marginTop: 10, position: "relative" }}>
                         <label style={{ fontSize: 12, opacity: 0.7, marginBottom: 4, display: "block" }}>
                           Select the correct game for this leg
                         </label>
