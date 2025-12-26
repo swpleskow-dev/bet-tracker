@@ -1767,39 +1767,48 @@ value={importLegSearchText[idx] ?? ""}
                       style={inputStyle}
                     />
 
-(importLegSearchOpen[idx] ?? false)
-                      <div style={dropdownStyle}>
-{importLegSearchLoading[idx] ? (
-                          <div style={rowStyle}>Searching…</div>
-                        ) : (legSearchText[idx] ?? "").trim().length < 2 ? (
-                          <div style={rowStyle}>Type at least 2 characters…</div>
-                        ) : (legSearchResults[idx] ?? []).length === 0 ? (
-                          <div style={rowStyle}>No matches</div>
-                        ) : (
-(importLegSearchResults[idx] ?? []).map((g) => (
-                            <div
-                              key={g.game_id}
-                              style={rowStyle}
-                              onClick={() => {
-                                updateImportLeg(idx, {
-                                  game_id: g.game_id,
-                                  game: { game_date: g.game_date, home_team: g.home_team, away_team: g.away_team },
-                                });
-                                setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
-                                setImportLegSearchText((p) => ({ ...p, [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}` }));
-                              }}
-                            >
-                              <div style={{ fontWeight: 700 }}>
-                                {g.away_team} @ {g.home_team}
-                              </div>
-                              <div style={{ fontSize: 12, opacity: 0.75 }}>
-                                {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} • {statusText(g)}
-                              </div>
-                            </div>
-                          ))
-                        
-                      </div>
-                    )}
+{(importLegSearchOpen[idx] ?? false) && (
+  <div style={dropdownStyle}>
+    {importLegSearchLoading[idx] ? (
+      <div style={rowStyle}>Searching…</div>
+    ) : (importLegSearchText[idx] ?? "").trim().length < 2 ? (
+      <div style={rowStyle}>Type at least 2 characters…</div>
+    ) : (importLegSearchResults[idx] ?? []).length === 0 ? (
+      <div style={rowStyle}>No matches</div>
+    ) : (
+      (importLegSearchResults[idx] ?? []).map((g) => (
+        <div
+          key={g.game_id}
+          style={rowStyle}
+          onClick={() => {
+            updateImportLeg(idx, {
+              game_id: g.game_id,
+              game: {
+                game_date: g.game_date,
+                home_team: g.home_team,
+                away_team: g.away_team,
+              },
+            });
+            setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
+            setImportLegSearchText((p) => ({
+              ...p,
+              [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}`,
+            }));
+          }}
+        >
+          <div style={{ fontWeight: 700 }}>
+            {g.away_team} @ {g.home_team}
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.75 }}>
+            {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} •{" "}
+            {statusText(g)}
+          </div>
+        </div>
+      ))
+    )}
+  </div>
+)}
+
 
                     {leg.game_id && (
                       <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
