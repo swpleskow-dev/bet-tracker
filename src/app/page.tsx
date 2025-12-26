@@ -336,6 +336,49 @@ export default function Page() {
   const [importError, setImportError] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
 
+  // --- import: editable draft so we can fix parlay legs before saving ---
+const [importDraft, setImportDraft] = useState<any | null>(null);
+
+// per-leg search UI state (indexed by leg index)
+const [legSearchText, setLegSearchText] = useState<Record<number, string>>({});
+const [legSearchOpen, setLegSearchOpen] = useState<Record<number, boolean>>({});
+const [legSearchLoading, setLegSearchLoading] = useState<Record<number, boolean>>({});
+const [legSearchResults, setLegSearchResults] = useState<Record<number, GameRow[]>>({});
+
+function updateImportLeg(idx: number, patch: any) {
+  setImportDraft((prev: any) => {
+    if (!prev?.legs || !Array.isArray(prev.legs)) return prev;
+    const next = { ...prev };
+    next.legs = prev.legs.map((l: any, i: number) => (i === idx ? { ...l, ...patch } : l));
+    return next;
+  });
+}
+
+async function searchGamesForLeg(idx: number, q: string) {
+  const query = q.trim();
+  setLegSearchText((p) => ({ ...p, [idx]: q }));
+
+  if (query.length < 2) {
+    setLegSearchResults((p) => ({ ...p, [idx]: [] }));
+    setLegSearchOpen((p) => ({ ...p, [idx]: false }));
+    return;
+  }
+
+  setLegSearchLoading((p) => ({ ...p, [idx]: true }));
+  setLegSearchOpen((p) => ({ ...p, [idx]: true }));
+
+  try {
+    const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(query)}`, { cache: "no-store" });
+    const j = await r.json();
+    setLegSearchResults((p) => ({ ...p, [idx]: (j.games ?? []) as GameRow[] }));
+  } catch {
+    setLegSearchResults((p) => ({ ...p, [idx]: [] }));
+  } finally {
+    setLegSearchLoading((p) => ({ ...p, [idx]: false }));
+  }
+}
+
+
   const [error, setError] = useState<string | null>(null);
 
   /** ---------- Load ---------- */
@@ -1007,6 +1050,7 @@ if (!r.ok) {
 }
 
       setImportResult(j);
+      setImportDraft(j.parsed); // <-- ADD THIS
       setImportOpen(true);
     } catch (e: any) {
       setImportError(e?.message ?? "Parse failed");
@@ -1658,57 +1702,179 @@ if (!r.ok) {
       </div>
 
       {/* Confirm import modal */}
-      {importOpen && importResult && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.35)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 16,
-            zIndex: 50,
+      {importOpen && importResult && importDraft && (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0,0,0,0.35)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 16,
+      zIndex: 50,
+    }}
+  >
+    <div style={{ background: "white", borderRadius: 14, padding: 16, maxWidth: 820, width: "100%" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <div style={{ fontWeight: 900, fontSize: 16 }}>Confirm import</div>
+        <button
+          type="button"
+          style={deleteButtonStyle}
+          onClick={() => {
+            setImportOpen(false);
+            setImportError(null);
           }}
         >
-          <div style={{ background: "white", borderRadius: 14, padding: 16, maxWidth: 720, width: "100%" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-              <div style={{ fontWeight: 900, fontSize: 16 }}>Confirm import</div>
-              <button type="button" style={deleteButtonStyle} onClick={() => setImportOpen(false)}>
-                Close
-              </button>
-            </div>
+          Close
+        </button>
+      </div>
 
-            <pre style={{ marginTop: 12, padding: 12, background: "#f7f7f8", borderRadius: 12, overflowX: "auto", fontSize: 12, maxHeight: 360 }}>
-              {JSON.stringify(importResult, null, 2)}
-            </pre>
+      {/* If this is a parlay, show leg fix UI */}
+      {importDraft.bet_type === "parlay" && Array.isArray(importDraft.legs) && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontWeight: 900, marginBottom: 8 }}>Parlay legs</div>
 
-            <div style={{ display: "flex", gap: 10, marginTop: 12, justifyContent: "flex-end" }}>
-              <button type="button" style={secondaryButtonStyle} onClick={() => setImportOpen(false)}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                style={buttonStyle}
-                onClick={async () => {
-                  try {
-                    await confirmImport();
-                  } catch (e: any) {
-                    setImportError(e?.message ?? "Import failed");
-                  }
-                }}
-              >
-                Confirm & Add
-              </button>
-            </div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {importDraft.legs.map((leg: any, idx: number) => {
+              const needsGame = !leg.game_id;
 
-            {importError && <div style={{ color: "crimson", marginTop: 10 }}>{importError}</div>}
+              return (
+                <div key={idx} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 800 }}>
+                      {leg.bet_type} — {leg.selection ?? ""}
+                      {leg.line != null ? ` (${leg.line})` : ""} • odds {leg.odds ?? "—"}
+                    </div>
+
+                    <div style={{ fontSize: 12, fontWeight: 800, color: needsGame ? "crimson" : "green" }}>
+                      {needsGame ? "Needs game selected" : "Game linked"}
+                    </div>
+                  </div>
+
+                  {/* Game picker */}
+                  <div style={{ marginTop: 10 }}>
+                    <label style={{ fontSize: 12, opacity: 0.7, marginBottom: 4, display: "block" }}>
+                      Select the correct game for this leg
+                    </label>
+
+                    <input
+                      value={legSearchText[idx] ?? ""}
+                      onChange={(e) => searchGamesForLeg(idx, e.target.value)}
+                      placeholder="Search team (DAL, Cowboys, Lions, DET...)"
+                      style={inputStyle}
+                    />
+
+                    {(legSearchOpen[idx] ?? false) && (
+                      <div style={dropdownStyle}>
+                        {legSearchLoading[idx] ? (
+                          <div style={rowStyle}>Searching…</div>
+                        ) : (legSearchText[idx] ?? "").trim().length < 2 ? (
+                          <div style={rowStyle}>Type at least 2 characters…</div>
+                        ) : (legSearchResults[idx] ?? []).length === 0 ? (
+                          <div style={rowStyle}>No matches</div>
+                        ) : (
+                          (legSearchResults[idx] ?? []).map((g) => (
+                            <div
+                              key={g.game_id}
+                              style={rowStyle}
+                              onClick={() => {
+                                // set leg.game_id + also store leg.game info
+                                updateImportLeg(idx, {
+                                  game_id: g.game_id,
+                                  game: { game_date: g.game_date, home_team: g.home_team, away_team: g.away_team },
+                                });
+                                setLegSearchOpen((p) => ({ ...p, [idx]: false }));
+                                setLegSearchText((p) => ({ ...p, [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}` }));
+                              }}
+                            >
+                              <div style={{ fontWeight: 700 }}>
+                                {g.away_team} @ {g.home_team}
+                              </div>
+                              <div style={{ fontSize: 12, opacity: 0.75 }}>
+                                {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} • {statusText(g)}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+
+                    {leg.game_id && (
+                      <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+                        Linked game_id: <b>{leg.game_id}</b>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
-    </main>
-  );
-}
+
+      {/* Raw JSON preview (optional but handy) */}
+      <pre
+        style={{
+          marginTop: 12,
+          padding: 12,
+          background: "#f7f7f8",
+          borderRadius: 12,
+          overflowX: "auto",
+          fontSize: 12,
+          maxHeight: 260,
+        }}
+      >
+        {JSON.stringify({ parsed: importDraft }, null, 2)}
+      </pre>
+
+      <div style={{ display: "flex", gap: 10, marginTop: 12, justifyContent: "flex-end" }}>
+        <button
+          type="button"
+          style={secondaryButtonStyle}
+          onClick={() => {
+            setImportOpen(false);
+            setImportError(null);
+          }}
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          style={buttonStyle}
+          onClick={async () => {
+            try {
+              // Block saving if parlay legs still missing game_id
+              if (importDraft?.bet_type === "parlay" && Array.isArray(importDraft.legs)) {
+                const missing = importDraft.legs.findIndex((l: any) => !l.game_id);
+                if (missing !== -1) {
+                  setImportError(`Please select a game for leg #${missing + 1} before confirming.`);
+                  return;
+                }
+              }
+
+              // IMPORTANT: use importDraft instead of importResult.parsed
+              // We'll temporarily swap importResult.parsed so your existing confirmImport() works.
+              const temp = importResult;
+              (temp as any).parsed = importDraft;
+              setImportResult(temp);
+
+              await confirmImport();
+            } catch (e: any) {
+              setImportError(e?.message ?? "Import failed");
+            }
+          }}
+        >
+          Confirm & Add
+        </button>
+      </div>
+
+      {importError && <div style={{ color: "crimson", marginTop: 10 }}>{importError}</div>}
+    </div>
+  </div>
+)}
+
 
 /* styles */
 const labelStyle: React.CSSProperties = {
