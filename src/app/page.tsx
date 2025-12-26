@@ -1873,8 +1873,7 @@ if (!r.ok) {
       {importError && <div style={{ color: "crimson", marginTop: 10 }}>{importError}</div>}
     </div>
   </div>
-)}
-          </main>
+  </main>
   );
 }
 
