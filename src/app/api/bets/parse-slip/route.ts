@@ -20,16 +20,6 @@ function isISODate(s: string | null) {
   return !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
 
-function addDaysSafe(dateStr: string | null, days: number) {
-  if (!isISODate(dateStr)) return null;
-
-  const d = new Date(`${dateStr}T00:00:00Z`);
-  if (Number.isNaN(d.getTime())) return null;
-
-  d.setUTCDate(d.getUTCDate() + days);
-  return ymd(d);
-}
-
 async function fileToDataUrl(file: File) {
   const ab = await file.arrayBuffer();
   const buf = Buffer.from(ab);
@@ -105,15 +95,10 @@ async function queryGames({
     .order("game_date", { ascending: false })
     .limit(50);
 
-  return { data: (data ?? []) as any[], error, orCount: orClauses.length };
+  return { data: (data ?? []) as any[], error };
 }
 
-function scoreCandidates(
-  data: any[],
-  homeVars: string[],
-  awayVars: string[],
-  date: string | null
-) {
+function scoreCandidates(data: any[], homeVars: string[], awayVars: string[], date: string | null) {
   const scored = data.map((g) => {
     const h = String(g.home_team ?? "").toUpperCase();
     const a = String(g.away_team ?? "").toUpperCase();
@@ -147,8 +132,9 @@ function scoreCandidates(
 }
 
 /**
- * Match a game_id from parsed game info (home/away/date).
- * Safe against missing or non-ISO dates (prevents "Invalid time value").
+ * Safe matcher:
+ * - Uses team match always
+ * - Uses date only if it is ISO YYYY-MM-DD
  */
 async function matchGameIdFromParsedGame(game: any): Promise<string | null> {
   const homeRaw = norm(game?.home_team);
@@ -162,52 +148,42 @@ async function matchGameIdFromParsedGame(game: any): Promise<string | null> {
   const homeVars = teamVariants(homeRaw);
   const awayVars = teamVariants(awayRaw);
 
-  // PASS 1: tight date window (date ± 1 day) only if date is valid ISO
+  // Pass 1: tight date window if date is valid
   if (date) {
-    const from = addDaysSafe(date, -1);
-    const to = addDaysSafe(date, +1);
+    const from = date;
+    const to = date;
 
-    if (from && to) {
-      const r1 = await queryGames({ from, to, homeVars, awayVars });
-      if (!r1.error && r1.data && r1.data.length > 0) {
-        const scored = scoreCandidates(r1.data, homeVars, awayVars, date);
-        const best = scored[0];
-        return best?.g?.game_id ?? null;
-      }
+    const r1 = await queryGames({ from, to, homeVars, awayVars });
+    if (!r1.error && r1.data.length > 0) {
+      const scored = scoreCandidates(r1.data, homeVars, awayVars, date);
+      return scored[0]?.g?.game_id ?? null;
     }
   }
 
-  // PASS 2: wide window (ignore date)
+  // Pass 2: wide window
   const wideFrom = ymd(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
   const wideTo = ymd(new Date(Date.now() + 365 * 24 * 60 * 60 * 1000));
 
   const r2 = await queryGames({ from: wideFrom, to: wideTo, homeVars, awayVars });
-  if (!r2.error && r2.data && r2.data.length > 0) {
+  if (!r2.error && r2.data.length > 0) {
     const scored = scoreCandidates(r2.data, homeVars, awayVars, date);
-    const best = scored[0];
-    return best?.g?.game_id ?? null;
+    return scored[0]?.g?.game_id ?? null;
   }
 
   return null;
 }
 
 /**
- * IMPORTANT: OpenAI strict JSON schema requires:
- * - every object has `required`
- * - `required` includes EVERY key in `properties`
- * Optional fields are represented by allowing null.
+ * STRICT JSON schema rules:
+ * - Every object has `required`
+ * - required includes ALL keys in properties
  */
 const betSlipSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
     sport: { type: "string", enum: ["NFL"] },
-
-    bet_type: {
-      type: "string",
-      enum: ["moneyline", "spread", "total", "player_prop", "parlay"],
-    },
-
+    bet_type: { type: "string", enum: ["moneyline", "spread", "total", "player_prop", "parlay"] },
     stake: { type: ["number", "null"] },
     odds: { type: ["number", "null"] },
 
@@ -236,11 +212,7 @@ const betSlipSchema = {
         type: "object",
         additionalProperties: false,
         properties: {
-          bet_type: {
-            type: "string",
-            enum: ["moneyline", "spread", "total", "player_prop"],
-          },
-
+          bet_type: { type: "string", enum: ["moneyline", "spread", "total", "player_prop"] },
           selection: { type: ["string", "null"] },
           line: { type: ["number", "null"] },
           odds: { type: ["number", "null"] },
@@ -278,7 +250,6 @@ const betSlipSchema = {
     sportsbook: { type: ["string", "null"] },
     confidence: { type: ["number", "null"] },
   },
-
   required: [
     "sport",
     "bet_type",
@@ -300,20 +271,14 @@ const betSlipSchema = {
 export async function POST(req: Request) {
   try {
     if (!OPENAI_API_KEY) {
-      return NextResponse.json(
-        { error: "Server misconfigured: OPENAI_API_KEY is missing." },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Server misconfigured: OPENAI_API_KEY is missing." }, { status: 500 });
     }
 
     const fd = await req.formData();
     const image = fd.get("image");
 
     if (!image || !(image instanceof File)) {
-      return NextResponse.json(
-        { error: "Missing image file (field name: image)." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing image file (field name: image)." }, { status: 400 });
     }
 
     const dataUrl = await fileToDataUrl(image);
@@ -321,12 +286,19 @@ export async function POST(req: Request) {
     const prompt = `
 Parse this sportsbook bet slip screenshot into structured JSON for an NFL bet tracker.
 
-Strict rules:
+Rules:
 - Output MUST match the provided JSON schema exactly.
-- DO NOT omit any fields. If unknown/not visible, set the field to null.
-- If the slip shows matchup/date once, reuse the top-level game object for legs.
-- Use YYYY-MM-DD when you can, otherwise set game_date to null.
-    `.trim();
+- DO NOT omit fields: if unknown/not visible, set to null.
+- bet_type must be one of: moneyline | spread | total | player_prop | parlay
+
+IMPORTANT:
+- For totals: selection MUST be "over" or "under" (not "TOTAL").
+- For spreads/moneyline: selection should be the team name shown.
+- For parlay: include legs[]. If the slip doesn’t clearly show matchup per leg, set leg.game fields to null.
+
+Dates:
+- game_date must be YYYY-MM-DD if you can. If not, set it to null.
+`.trim();
 
     const openaiRes = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -367,19 +339,8 @@ Strict rules:
         ? await openaiRes.json().catch(() => null)
         : await openaiRes.text().catch(() => null);
 
-      console.error("OPENAI ERROR", {
-        status: openaiRes.status,
-        requestId,
-        body,
-      });
-
       return NextResponse.json(
-        {
-          error: "OpenAI request failed",
-          status: openaiRes.status,
-          requestId,
-          body,
-        },
+        { error: "OpenAI request failed", status: openaiRes.status, requestId, body },
         { status: 500 }
       );
     }
@@ -388,46 +349,30 @@ Strict rules:
 
     const outputText: string | null =
       responseJson?.output_text ??
-      responseJson?.output?.[0]?.content?.find((c: any) => c?.type === "output_text")
-        ?.text ??
+      responseJson?.output?.[0]?.content?.find((c: any) => c?.type === "output_text")?.text ??
       responseJson?.output?.[0]?.content?.[0]?.text ??
       null;
 
     if (!outputText || typeof outputText !== "string") {
-      return NextResponse.json(
-        {
-          error: "OpenAI response did not include output_text.",
-          debug: { keys: Object.keys(responseJson ?? {}) },
-        },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "OpenAI response did not include output_text." }, { status: 500 });
     }
 
     let parsed: any;
     try {
       parsed = JSON.parse(outputText);
     } catch {
-      return NextResponse.json(
-        { error: "Model output was not valid JSON.", raw: outputText },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Model output was not valid JSON.", raw: outputText }, { status: 500 });
     }
 
-    // Match a top-level game_id if possible
+    // Match top-level game (for singles/props). For parlays, legs can be unmatched.
     const topGameId = await matchGameIdFromParsedGame(parsed?.game);
 
-    // For parlay legs:
-    // - Prefer leg.game if present, otherwise use top-level parsed.game
-    // - If still can't match, inherit topGameId so import doesn't fail
+    // For legs: DO NOT force/override game_id if we can't match.
     if (Array.isArray(parsed?.legs)) {
       const legsWithIds = [];
       for (const leg of parsed.legs) {
-        const legGameObj = leg?.game ?? parsed?.game ?? null;
-
-        let legGameId = await matchGameIdFromParsedGame(legGameObj);
-        if (!legGameId && topGameId) legGameId = topGameId;
-
-        legsWithIds.push({ ...leg, game: legGameObj, game_id: legGameId ?? null });
+        const legGameId = await matchGameIdFromParsedGame(leg?.game);
+        legsWithIds.push({ ...leg, game_id: legGameId ?? null });
       }
       parsed.legs = legsWithIds;
     }
@@ -437,7 +382,6 @@ Strict rules:
       game_id: topGameId ?? null,
     });
   } catch (e: any) {
-    console.error("parse-slip route error", e);
     return NextResponse.json({ error: e?.message ?? "unknown" }, { status: 500 });
   }
 }
