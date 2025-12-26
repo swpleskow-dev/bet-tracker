@@ -340,10 +340,11 @@ export default function Page() {
 const [importDraft, setImportDraft] = useState<any | null>(null);
 
 // per-leg search UI state (indexed by leg index)
-const [legSearchText, setLegSearchText] = useState<Record<number, string>>({});
-const [legSearchOpen, setLegSearchOpen] = useState<Record<number, boolean>>({});
-const [legSearchLoading, setLegSearchLoading] = useState<Record<number, boolean>>({});
-const [legSearchResults, setLegSearchResults] = useState<Record<number, GameRow[]>>({});
+const [importLegSearchText, setImportLegSearchText] = useState<Record<number, string>>({});
+const [importLegSearchOpen, setImportLegSearchOpen] = useState<Record<number, boolean>>({});
+const [importLegSearchLoading, setImportLegSearchLoading] = useState<Record<number, boolean>>({});
+const [importLegSearchResults, setImportLegSearchResults] = useState<Record<number, GameRow[]>>({});
+
 
 function updateImportLeg(idx: number, patch: any) {
   setImportDraft((prev: any) => {
@@ -356,27 +357,28 @@ function updateImportLeg(idx: number, patch: any) {
 
 async function searchGamesForLeg(idx: number, q: string) {
   const query = q.trim();
-  setLegSearchText((p) => ({ ...p, [idx]: q }));
+  setImportLegSearchText((p) => ({ ...p, [idx]: q }));
 
   if (query.length < 2) {
-    setLegSearchResults((p) => ({ ...p, [idx]: [] }));
-    setLegSearchOpen((p) => ({ ...p, [idx]: false }));
+    setImportLegSearchResults((p) => ({ ...p, [idx]: [] }));
+    setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
     return;
   }
 
-  setLegSearchLoading((p) => ({ ...p, [idx]: true }));
-  setLegSearchOpen((p) => ({ ...p, [idx]: true }));
+  setImportLegSearchLoading((p) => ({ ...p, [idx]: true }));
+  setImportLegSearchOpen((p) => ({ ...p, [idx]: true }));
 
   try {
     const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(query)}`, { cache: "no-store" });
     const j = await r.json();
-    setLegSearchResults((p) => ({ ...p, [idx]: (j.games ?? []) as GameRow[] }));
+    setImportLegSearchResults((p) => ({ ...p, [idx]: (j.games ?? []) as GameRow[] }));
   } catch {
-    setLegSearchResults((p) => ({ ...p, [idx]: [] }));
+    setImportLegSearchResults((p) => ({ ...p, [idx]: [] }));
   } finally {
-    setLegSearchLoading((p) => ({ ...p, [idx]: false }));
+    setImportLegSearchLoading((p) => ({ ...p, [idx]: false }));
   }
 }
+
 
 
   const [error, setError] = useState<string | null>(null);
@@ -1759,22 +1761,22 @@ if (!r.ok) {
                     </label>
 
                     <input
-                      value={legSearchText[idx] ?? ""}
+value={importLegSearchText[idx] ?? ""}
                       onChange={(e) => searchGamesForLeg(idx, e.target.value)}
                       placeholder="Search team (DAL, Cowboys, Lions, DET...)"
                       style={inputStyle}
                     />
 
-                    {(legSearchOpen[idx] ?? false) && (
+(importLegSearchOpen[idx] ?? false)
                       <div style={dropdownStyle}>
-                        {legSearchLoading[idx] ? (
+{importLegSearchLoading[idx] ? (
                           <div style={rowStyle}>Searching…</div>
                         ) : (legSearchText[idx] ?? "").trim().length < 2 ? (
                           <div style={rowStyle}>Type at least 2 characters…</div>
                         ) : (legSearchResults[idx] ?? []).length === 0 ? (
                           <div style={rowStyle}>No matches</div>
                         ) : (
-                          (legSearchResults[idx] ?? []).map((g) => (
+(importLegSearchResults[idx] ?? []).map((g) => (
                             <div
                               key={g.game_id}
                               style={rowStyle}
@@ -1783,8 +1785,8 @@ if (!r.ok) {
                                   game_id: g.game_id,
                                   game: { game_date: g.game_date, home_team: g.home_team, away_team: g.away_team },
                                 });
-                                setLegSearchOpen((p) => ({ ...p, [idx]: false }));
-                                setLegSearchText((p) => ({ ...p, [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}` }));
+                                setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
+                                setImportLegSearchText((p) => ({ ...p, [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}` }));
                               }}
                             >
                               <div style={{ fontWeight: 700 }}>
