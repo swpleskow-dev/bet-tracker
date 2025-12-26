@@ -260,6 +260,8 @@ export default function Page() {
   const [bets, setBets] = useState<Bet[]>([]);
   const [gamesById, setGamesById] = useState<Record<string, GameRow>>({});
   const [legsByParlayId, setLegsByParlayId] = useState<Record<string, ParlayLeg[]>>({});
+  const [importLegSearchError, setImportLegSearchError] = useState<Record<number, string>>({});
+
 
   // ---- form: shared ----
   const [bettor, setBettor] = useState<Bettor>("sydney");
@@ -358,6 +360,7 @@ function updateImportLeg(idx: number, patch: any) {
 async function searchGamesForLeg(idx: number, q: string) {
   const query = q.trim();
   setImportLegSearchText((p) => ({ ...p, [idx]: q }));
+  setImportLegSearchError((p) => ({ ...p, [idx]: "" }));
 
   if (query.length < 2) {
     setImportLegSearchResults((p) => ({ ...p, [idx]: [] }));
@@ -369,19 +372,33 @@ async function searchGamesForLeg(idx: number, q: string) {
   setImportLegSearchOpen((p) => ({ ...p, [idx]: true }));
 
   try {
-    const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(query)}`, { cache: "no-store" });
-    const j = await r.json();
-    setImportLegSearchResults((p) => ({ ...p, [idx]: (j.games ?? []) as GameRow[] }));
-  } catch {
+    const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(query)}`, {
+      cache: "no-store",
+    });
+
+    const j = await r.json().catch(() => null);
+
+    if (!r.ok) {
+      setImportLegSearchResults((p) => ({ ...p, [idx]: [] }));
+      setImportLegSearchError((p) => ({
+        ...p,
+        [idx]: j?.error ? String(j.error) : `Search failed (${r.status})`,
+      }));
+      return;
+    }
+
+    setImportLegSearchResults((p) => ({ ...p, [idx]: (j?.games ?? []) as GameRow[] }));
+  } catch (e: any) {
     setImportLegSearchResults((p) => ({ ...p, [idx]: [] }));
+    setImportLegSearchError((p) => ({ ...p, [idx]: e?.message ?? "Network error" }));
   } finally {
     setImportLegSearchLoading((p) => ({ ...p, [idx]: false }));
   }
 }
 
 
-
   const [error, setError] = useState<string | null>(null);
+  
 
   /** ---------- Load ---------- */
   async function loadAll() {
@@ -1755,69 +1772,75 @@ if (!r.ok) {
                     </div>
                   </div>
 
-                  <div style={{ marginTop: 10 }}>
-                    <label style={{ fontSize: 12, opacity: 0.7, marginBottom: 4, display: "block" }}>
-                      Select the correct game for this leg
-                    </label>
+                  {/* Game picker */}
+<div style={{ marginTop: 10 }}>
+  <label style={{ fontSize: 12, opacity: 0.7, marginBottom: 4, display: "block" }}>
+    Select the correct game for this leg
+  </label>
 
-                    <input
-value={importLegSearchText[idx] ?? ""}
-                      onChange={(e) => searchGamesForLeg(idx, e.target.value)}
-                      placeholder="Search team (DAL, Cowboys, Lions, DET...)"
-                      style={inputStyle}
-                    />
+  <input
+    value={importLegSearchText[idx] ?? ""}
+    onChange={(e) => searchGamesForLeg(idx, e.target.value)}
+    placeholder="Search team (DAL, Cowboys, Lions, DET...)"
+    style={inputStyle}
+  />
 
-{(importLegSearchOpen[idx] ?? false) && (
-  <div style={dropdownStyle}>
-    {importLegSearchLoading[idx] ? (
-      <div style={rowStyle}>Searching…</div>
-    ) : (importLegSearchText[idx] ?? "").trim().length < 2 ? (
-      <div style={rowStyle}>Type at least 2 characters…</div>
-    ) : (importLegSearchResults[idx] ?? []).length === 0 ? (
-      <div style={rowStyle}>No matches</div>
-    ) : (
-      (importLegSearchResults[idx] ?? []).map((g) => (
-        <div
-          key={g.game_id}
-          style={rowStyle}
-          onClick={() => {
-            updateImportLeg(idx, {
-              game_id: g.game_id,
-              game: {
-                game_date: g.game_date,
-                home_team: g.home_team,
-                away_team: g.away_team,
-              },
-            });
-            setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
-            setImportLegSearchText((p) => ({
-              ...p,
-              [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}`,
-            }));
-          }}
-        >
-          <div style={{ fontWeight: 700 }}>
-            {g.away_team} @ {g.home_team}
+  {/* 🔴 SHOW SEARCH ERROR HERE */}
+  {importLegSearchError[idx] && (
+    <div style={{ marginTop: 6, fontSize: 12, color: "crimson" }}>
+      {importLegSearchError[idx]}
+    </div>
+  )}
+
+  {(importLegSearchOpen[idx] ?? false) && (
+    <div style={dropdownStyle}>
+      {importLegSearchLoading[idx] ? (
+        <div style={rowStyle}>Searching…</div>
+      ) : (importLegSearchText[idx] ?? "").trim().length < 2 ? (
+        <div style={rowStyle}>Type at least 2 characters…</div>
+      ) : (importLegSearchResults[idx] ?? []).length === 0 ? (
+        <div style={rowStyle}>No matches</div>
+      ) : (
+        (importLegSearchResults[idx] ?? []).map((g) => (
+          <div
+            key={g.game_id}
+            style={rowStyle}
+            onClick={() => {
+              updateImportLeg(idx, {
+                game_id: g.game_id,
+                game: {
+                  game_date: g.game_date,
+                  home_team: g.home_team,
+                  away_team: g.away_team,
+                },
+              });
+              setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
+              setImportLegSearchText((p) => ({
+                ...p,
+                [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}`,
+              }));
+            }}
+          >
+            <div style={{ fontWeight: 700 }}>
+              {g.away_team} @ {g.home_team}
+            </div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>
+              {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} •{" "}
+              {statusText(g)}
+            </div>
           </div>
-          <div style={{ fontSize: 12, opacity: 0.75 }}>
-            {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} •{" "}
-            {statusText(g)}
-          </div>
-        </div>
-      ))
-    )}
-  </div>
-)}
+        ))
+      )}
+    </div>
+  )}
 
-
-                    {leg.game_id && (
-                      <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-                        Linked game_id: <b>{leg.game_id}</b>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
+  {leg.game_id && (
+    <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+      Linked game_id: <b>{leg.game_id}</b>
+    </div>
+  )}
+</div>
+);
             })}
           </div>
         </div>
