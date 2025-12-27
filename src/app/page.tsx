@@ -1092,6 +1092,95 @@ if (!r.ok) {
   }
 
   async function confirmImport() {
+    // ✅ if screenshot contains multiple straight bets
+if (importResult?.parsed?.kind === "batch") {
+  const batch = importResult.parsed.bets ?? [];
+
+  if (batch.length === 0) {
+    setImportError("No bets found in screenshot.");
+    return;
+  }
+
+  if (importResult?.parsed?.kind === "batch") {
+  const batch = importResult.parsed.bets ?? [];
+
+  if (batch.length === 0) {
+    setImportError("No bets found in screenshot.");
+    return;
+  }
+
+  for (const b of batch) {
+    if (!b.game_id) {
+      setImportError(`Could not match game for: ${b.selection ?? "unknown selection"}`);
+      return;
+    }
+
+    const { error } = await supabase.from("bets").insert({
+      user_id: USER_ID,
+      bettor: importBettor,
+      sport: "NFL",
+      game_id: b.game_id,                 // ✅ REQUIRED
+      bet_type: b.bet_type,
+      selection: b.selection ?? "",
+      line: b.line ?? null,
+      stake: b.stake ?? 1,
+      odds: b.odds ?? -110,
+      parlay_id: null,
+      prop_player: null,
+      prop_market: null,
+      prop_side: null,
+      prop_line: null,
+      prop_notes: "Imported from screenshot",
+      result_override: null,
+    });
+
+    if (error) {
+      setImportError(error.message);
+      return;
+    }
+  }
+
+  setImportOpen(false);
+  setImportError(null);
+  await loadAll();
+  return;
+}
+
+    // 2️⃣ Insert as a normal single bet
+    const { error } = await supabase.from("bets").insert({
+      user_id: USER_ID,
+      bettor: importBettor,
+      sport: "NFL",
+
+      game_id, // ✅ REQUIRED
+      bet_type: b.bet_type,
+      selection: b.selection ?? "",
+      line: b.line ?? null,
+
+      stake: b.stake ?? 1,
+      odds: b.odds ?? -110,
+
+      parlay_id: null,
+      prop_player: null,
+      prop_market: null,
+      prop_side: null,
+      prop_line: null,
+      prop_notes: "Imported from screenshot",
+      result_override: null,
+    });
+
+    if (error) {
+      setImportError(error.message);
+      return;
+    }
+  }
+
+  setImportOpen(false);
+  setImportError(null);
+  await loadAll();
+  return;
+}
+
     if (!importResult) return;
 
     const slip = (importResult as any).parsed;
