@@ -1,48 +1,70 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
+import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-type ParsedSingle = {
-  sport: "NFL";
-  bet_type: "moneyline" | "spread" | "total" | "player_prop";
-  game: { game_date: string; home_team: string; away_team: string } | null;
-  selection: string | null;
-  line: number | null;
-  stake: number | null;
-  odds: number | null;
-};
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
-type ParsedParlayLeg = {
-  bet_type: "moneyline" | "spread" | "total";
-  selection: string | null;
-  line: number | null;
-  odds: number | null;
-  game: { game_date: string; home_team: string; away_team: string } | null;
-};
+function teamKey(s?: string | null) {
+  const x = (s ?? "").toUpperCase().trim();
+  if (!x) return "";
+  const first = x.split(/\s+/)[0] ?? "";
+  return first.replace(/[^A-Z]/g, "");
+}
 
-type Parsed =
-  | {
-      sport: "NFL";
-      kind: "single";
-      bet: ParsedSingle;
-    }
-  | {
-      sport: "NFL";
-      kind: "parlay";
-      stake: number | null;
-      odds: number | null;
-      legs: ParsedParlayLeg[];
-    }
-  | {
-      sport: "NFL";
-      kind: "batch"; // ✅ multiple straight bets
-      bets: ParsedSingle[];
-    };
+function normalizeYMD(s?: string | null) {
+  const t = (s ?? "").trim();
+  if (!t) return null;
+
+  // already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+
+  // support things like "Dec-28-2025" or "Dec 28 2025"
+  const cleaned = t.replace(/,/g, " ").replace(/\s+/g, " ").trim();
+  const d = new Date(cleaned);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+async function findGameId(game: any): Promise<string | null> {
+  const game_date = normalizeYMD(game?.game_date);
+  const home = teamKey(game?.home_team);
+  const away = teamKey(game?.away_team);
+
+  if (!game_date || !home || !away) return null;
+
+  // Look for same date where either home/away match by key
+  const { data, error } = await supabase
+    .from("games")
+    .select("game_id, game_date, home_team, away_team")
+    .eq("game_date", game_date)
+    .limit(50);
+
+  if (error) return null;
+
+  const rows = data ?? [];
+  const exact = rows.find((r: any) => teamKey(r.home_team) === home && teamKey(r.away_team) === away);
+  if (exact) return exact.game_id;
+
+  // try swapped (sometimes screenshot lists @ differently)
+  const swapped = rows.find((r: any) => teamKey(r.home_team) === away && teamKey(r.away_team) === home);
+  if (swapped) return swapped.game_id;
+
+  // fallback: match if either side matches (best-effort)
+  const partial = rows.find((r: any) => {
+    const hk = teamKey(r.home_team);
+    const ak = teamKey(r.away_team);
+    return (hk === home || ak === home) && (hk === away || ak === away);
+  });
+
+  return partial?.game_id ?? null;
+}
 
 export async function POST(req: Request) {
   try {
@@ -57,10 +79,6 @@ export async function POST(req: Request) {
     const base64 = Buffer.from(bytes).toString("base64");
     const dataUrl = `data:${file.type};base64,${base64}`;
 
-    // ✅ IMPORTANT: We explicitly tell the model that screenshots can be:
-    // - a single bet
-    // - a parlay slip
-    // - a bet history list with MULTIPLE straight bets (batch)
     const prompt = `
 You are parsing an NFL sportsbook screenshot.
 
@@ -74,17 +92,17 @@ Rules:
   DO NOT treat it as a parlay.
   Return kind="batch" with a list of bets.
 - Only return kind="parlay" if it is clearly ONE parlay bet slip with legs combined into one wager.
-- For each bet/leg:
-  - sport: NFL
-  - bet_type: moneyline | spread | total | player_prop
-  - game: include game_date (YYYY-MM-DD if possible; if only Dec-28-2025 is shown use 2025-12-28),
-          home_team and away_team abbreviations or names as shown.
-  - selection: team abbreviation/name or "over"/"under"
-  - line: spread/total number if present
-  - stake: dollars risk (if present)
-  - odds: American odds if present (e.g. -112 or +300)
-If you can't find a field, set it to null.
-Return ONLY valid JSON.
+
+For each bet/leg return:
+- sport: "NFL"
+- bet_type: moneyline | spread | total | player_prop
+- game: { game_date, home_team, away_team } (date like 2025-12-28)
+- selection: team or "over"/"under"
+- line: number or null
+- stake: dollars risk or null
+- odds: American odds integer or null
+
+If unknown, return null. Return ONLY valid JSON.
 `;
 
     const resp = await openai.responses.create({
@@ -98,24 +116,38 @@ Return ONLY valid JSON.
           ],
         },
       ],
-      // no response_format schema here (avoids the JSON schema errors you saw)
     });
 
-    const text = resp.output_text?.trim() || "";
-    let parsed: Parsed | null = null;
-
+    const raw = resp.output_text?.trim() || "";
+    let parsed: any;
     try {
-      parsed = JSON.parse(text);
+      parsed = JSON.parse(raw);
     } catch {
-      return NextResponse.json(
-        { error: "Model did not return valid JSON", raw: text },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Model did not return valid JSON", raw }, { status: 500 });
     }
 
-    // minimal shape guard
-    if (!parsed || parsed.sport !== "NFL" || !("kind" in parsed)) {
+    if (!parsed || parsed.sport !== "NFL" || !parsed.kind) {
       return NextResponse.json({ error: "Unexpected parse format", raw: parsed }, { status: 500 });
+    }
+
+    // ✅ Attach game_id server-side
+    if (parsed.kind === "single") {
+      const gid = await findGameId(parsed.bet?.game);
+      parsed.bet.game_id = gid;
+    }
+
+    if (parsed.kind === "batch") {
+      for (const b of parsed.bets ?? []) {
+        const gid = await findGameId(b?.game);
+        b.game_id = gid;
+      }
+    }
+
+    if (parsed.kind === "parlay") {
+      for (const leg of parsed.legs ?? []) {
+        const gid = await findGameId(leg?.game);
+        leg.game_id = gid;
+      }
     }
 
     return NextResponse.json({ parsed });
