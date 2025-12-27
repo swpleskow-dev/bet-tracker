@@ -100,6 +100,16 @@ function normalizeOverride(v: string | null | undefined): Result | null {
   return null;
 }
 
+function teamKey(s?: string | null) {
+  const x = (s ?? "").toUpperCase().trim();
+  if (!x) return "";
+  // take first token, remove non-letters: "DAL COWBOYS" -> "DAL"
+  const first = x.split(/\s+/)[0] ?? "";
+  return first.replace(/[^A-Z]/g, "");
+}
+
+
+
 function calcResultLike(
   betType: "moneyline" | "spread" | "total",
   selection: string,
@@ -107,6 +117,7 @@ function calcResultLike(
   g?: GameRow
 ): Result {
   if (!g) return { label: "No game data", tone: "neutral" };
+
   const hs = g.home_score ?? 0;
   const as = g.away_score ?? 0;
 
@@ -115,35 +126,54 @@ function calcResultLike(
   const away = g.away_team;
   const home = g.home_team;
 
+  // Totals (over/under) don't depend on team names
   if (betType === "total") {
     const ln = Number(line ?? NaN);
     if (!Number.isFinite(ln)) return { label: "Pending", tone: "neutral" };
 
     const total = hs + as;
-    const pick = selection.toLowerCase();
+    const pick = (selection ?? "").toLowerCase().trim();
 
     if (total === ln) return { label: "Push", tone: "neutral" };
+
     const won =
-      pick === "over" ? total > ln : pick === "under" ? total < ln : false;
+      pick === "over" ? total > ln :
+      pick === "under" ? total < ln :
+      false;
+
     return won ? { label: "Won", tone: "good" } : { label: "Lost", tone: "bad" };
   }
+
+  // Normalize team comparisons so "DAL COWBOYS" matches "DAL"
+  const pickKey = teamKey(selection);
+  const awayKey = teamKey(away);
+  const homeKey = teamKey(home);
+
+  const pickedAway = pickKey === awayKey;
+  const pickedHome = pickKey === homeKey;
+
+  if (!pickedAway && !pickedHome) return { label: "Pending", tone: "neutral" };
 
   if (betType === "spread") {
     const ln = Number(line ?? NaN);
     if (!Number.isFinite(ln)) return { label: "Pending", tone: "neutral" };
 
-    const pick = selection.toUpperCase();
-    const pickedAway = pick === away;
-    const pickedHome = pick === home;
-    if (!pickedAway && !pickedHome) return { label: "Pending", tone: "neutral" };
-
     const diffFromPick = pickedHome ? (hs - as) + ln : (as - hs) + ln;
 
     if (diffFromPick === 0) return { label: "Push", tone: "neutral" };
+
     return diffFromPick > 0
       ? { label: "Won", tone: "good" }
       : { label: "Lost", tone: "bad" };
   }
+
+  // moneyline
+  if (hs === as) return { label: "Push", tone: "neutral" };
+
+  const won = pickedHome ? hs > as : pickedAway ? as > hs : false;
+  return won ? { label: "Won", tone: "good" } : { label: "Lost", tone: "bad" };
+}
+
 
   // moneyline
   const pick = selection.toUpperCase();
