@@ -1103,7 +1103,12 @@ if (!r.ok) {
 
     // Single bet / prop
     if (slip.bet_type !== "parlay") {
-      const game_id = (importResult as any).game_id ?? null;
+const game_id_from_result = (importResult as any)?.game_id ?? null;
+...
+if (slip?.bet_type !== "parlay" && slip?.kind !== "batch") {
+  const game_id = game_id_from_result;
+  if (!game_id) { ... }
+}
       if (!game_id) throw new Error("Could not match screenshot to a game (teams/date missing or unclear).");
 
       const common = {
