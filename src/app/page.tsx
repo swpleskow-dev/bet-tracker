@@ -1940,13 +1940,14 @@ if (!r.ok) {
           Confirm & Add
         </button>
       </div>
-      </main>
-);
+      
 
       {importError && <div style={{ color: "crimson", marginTop: 10 }}>{importError}</div>}
     </div>
   </div>
 ) : null}
+      </main>
+);
 
 /* styles */
 const labelStyle: React.CSSProperties = {
