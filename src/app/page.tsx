@@ -1091,134 +1091,166 @@ if (!r.ok) {
     }
   }
 
-  async function confirmImport() {
-    if (!importResult) return;
+  async function confirmImport(slipOverride?: any) {
+  setImportError(null);
 
-    const slip = (importResult as any).parsed;
+  const slip = slipOverride ?? (importResult as any)?.parsed;
+  if (!slip) return;
 
-    async function insert(payload: any) {
-      const { error } = await supabase.from("bets").insert(payload);
-      if (error) throw new Error(error.message);
-    }
+  const game_id_from_result = (importResult as any)?.game_id ?? null;
 
-    // Single bet / prop
-    if (slip.bet_type !== "parlay") {
-const game_id_from_result = (importResult as any)?.game_id ?? null;
-...
-if (slip?.bet_type !== "parlay" && slip?.kind !== "batch") {
-  const game_id = game_id_from_result;
-  if (!game_id) { ... }
-}
-      if (!game_id) throw new Error("Could not match screenshot to a game (teams/date missing or unclear).");
+  /* ----------------------------------------
+     1) MULTIPLE STRAIGHT BETS (batch)
+  -----------------------------------------*/
+  if (slip.kind === "batch") {
+    const batch = slip.bets ?? [];
 
-      const common = {
-        user_id: USER_ID,
-        sport: "NFL",
-        bettor: importBettor,
-        stake: Number(slip.stake ?? 0),
-        odds: Number(slip.odds ?? 0),
-        parlay_id: null,
-      };
-
-      if (slip.bet_type === "player_prop") {
-        await insert({
-          ...common,
-          game_id,
-          bet_type: "player_prop",
-          selection: "prop",
-          line: null,
-          prop_player: slip.prop_player ?? null,
-          prop_market: slip.prop_market ?? null,
-          prop_side: slip.prop_side ?? null,
-          prop_line: slip.prop_line ?? null,
-          prop_notes: slip.sportsbook ? `Imported from ${slip.sportsbook}` : "Imported from screenshot",
-          result_override: "Pending",
-        });
-      } else {
-        await insert({
-          ...common,
-          game_id,
-          bet_type: slip.bet_type,
-          selection: slip.selection ?? "",
-          line: slip.bet_type === "moneyline" ? null : Number(slip.line ?? 0),
-          prop_player: null,
-          prop_market: null,
-          prop_side: null,
-          prop_line: null,
-          prop_notes: slip.sportsbook ? `Imported from ${slip.sportsbook}` : null,
-          result_override: null,
-        });
-      }
-
-      setImportOpen(false);
-      setImportResult(null);
-      setImportFile(null);
-      await loadAll();
+    if (batch.length === 0) {
+      setImportError("No bets found in screenshot.");
       return;
     }
 
-    // Parlay
-    const legs = slip.legs ?? [];
-    if (legs.length < 2) throw new Error("Parsed as parlay but found <2 legs.");
+    for (const b of batch) {
+      if (!b.game_id) {
+        setImportError(`Missing game for bet: ${b.selection ?? "unknown"}`);
+        return;
+      }
 
-    const parlayId = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).toString();
+      const { error } = await supabase.from("bets").insert({
+        user_id: USER_ID,
+        bettor: importBettor,
+        sport: "NFL",
+        game_id: b.game_id,
+        bet_type: b.bet_type,
+        selection: b.selection ?? "",
+        line: b.line ?? null,
+        stake: Number(b.stake ?? 1),
+        odds: Number(b.odds ?? -110),
+        parlay_id: null,
+        prop_player: null,
+        prop_market: null,
+        prop_side: null,
+        prop_line: null,
+        prop_notes: "Imported from screenshot",
+        result_override: null,
+      });
 
-    const { error: headerErr } = await supabase.from("bets").insert({
+      if (error) {
+        setImportError(error.message);
+        return;
+      }
+    }
+
+    setImportOpen(false);
+    await loadAll();
+    return;
+  }
+
+  /* ----------------------------------------
+     2) SINGLE BET (moneyline / spread / total)
+  -----------------------------------------*/
+  if (slip.bet_type !== "parlay") {
+    if (!game_id_from_result) {
+      setImportError("Could not match this bet to a game.");
+      return;
+    }
+
+    const { error } = await supabase.from("bets").insert({
       user_id: USER_ID,
-      sport: "NFL",
       bettor: importBettor,
-      stake: Number(slip.stake ?? 0),
-      odds: Number(slip.odds ?? 0),
-      bet_type: "parlay",
-      selection: "parlay",
-      line: null,
-      game_id: parlayId,
-      parlay_id: parlayId,
+      sport: "NFL",
+      game_id: game_id_from_result,
+      bet_type: slip.bet_type,
+      selection: slip.selection ?? "",
+      line: slip.bet_type === "moneyline" ? null : Number(slip.line ?? 0),
+      stake: Number(slip.stake ?? 1),
+      odds: Number(slip.odds ?? -110),
+      parlay_id: null,
       prop_player: null,
       prop_market: null,
       prop_side: null,
       prop_line: null,
-      prop_notes: slip.sportsbook ? `Imported from ${slip.sportsbook}` : "Imported from screenshot",
+      prop_notes: "Imported from screenshot",
       result_override: null,
     });
 
-    if (headerErr) throw new Error(headerErr.message);
-
-    // NOTE: current parlay_legs schema doesn't support prop legs. We skip prop legs or store them as text.
-    const legsPayload = (legs as any[]).map((l) => {
-      if (!l.game_id) throw new Error("A parlay leg could not be matched to a game.");
-      if (l.bet_type === "player_prop") {
-        return {
-          user_id: USER_ID,
-          parlay_id: parlayId,
-          sport: "NFL",
-          game_id: l.game_id,
-          leg_type: "total",
-          selection: `PROP: ${l.prop_player ?? ""} ${l.prop_market ?? ""} ${l.prop_side ?? ""} ${l.prop_line ?? ""}`.trim(),
-          line: null,
-          odds: Number(l.odds ?? -110),
-        };
-      }
-      return {
-        user_id: USER_ID,
-        parlay_id: parlayId,
-        sport: "NFL",
-        game_id: l.game_id,
-        leg_type: l.bet_type,
-        selection: l.selection ?? "",
-        line: l.bet_type === "moneyline" ? null : Number(l.line ?? 0),
-        odds: Number(l.odds ?? -110),
-      };
-    });
-
-    const { error: legsErr } = await supabase.from("parlay_legs").insert(legsPayload);
-    if (legsErr) throw new Error(legsErr.message);
+    if (error) {
+      setImportError(error.message);
+      return;
+    }
 
     setImportOpen(false);
-    setImportResult(null);
-    setImportFile(null);
     await loadAll();
+    return;
   }
+
+  /* ----------------------------------------
+     3) PARLAY
+  -----------------------------------------*/
+  const legs = slip.legs ?? [];
+  if (legs.length < 2) {
+    setImportError("Parlay must have at least 2 legs.");
+    return;
+  }
+
+  const missingLeg = legs.findIndex((l: any) => !l.game_id);
+  if (missingLeg !== -1) {
+    setImportError(`Please select a game for leg #${missingLeg + 1}.`);
+    return;
+  }
+
+  const parlayId =
+    globalThis.crypto?.randomUUID?.() ??
+    `${Date.now()}-${Math.random()}`;
+
+  const { error: headerErr } = await supabase.from("bets").insert({
+    user_id: USER_ID,
+    sport: "NFL",
+    bettor: importBettor,
+    game_id: parlayId,
+    bet_type: "parlay",
+    selection: "parlay",
+    line: null,
+    stake: Number(slip.stake ?? 1),
+    odds: Number(slip.odds ?? -110),
+    parlay_id: parlayId,
+    prop_player: null,
+    prop_market: null,
+    prop_side: null,
+    prop_line: null,
+    prop_notes: "Imported from screenshot",
+    result_override: null,
+  });
+
+  if (headerErr) {
+    setImportError(headerErr.message);
+    return;
+  }
+
+  const legsPayload = legs.map((l: any) => ({
+    user_id: USER_ID,
+    parlay_id: parlayId,
+    sport: "NFL",
+    game_id: l.game_id,
+    leg_type: l.bet_type,
+    selection: l.selection ?? "",
+    line: l.bet_type === "moneyline" ? null : Number(l.line ?? 0),
+    odds: Number(l.odds ?? -110),
+  }));
+
+  const { error: legsErr } = await supabase
+    .from("parlay_legs")
+    .insert(legsPayload);
+
+  if (legsErr) {
+    setImportError(legsErr.message);
+    return;
+  }
+
+  setImportOpen(false);
+  await loadAll();
+}
+
 
   function SummaryCard({ title, s }: { title: string; s: Summary }) {
     return (
