@@ -1923,25 +1923,23 @@ if (!r.ok) {
               </button>
 
               <button
-                type="button"
-                style={buttonStyle}
-                onClick={async () => {
-                  if (importDraft?.bet_type === "parlay" && Array.isArray(importDraft.legs)) {
-                    const missing = importDraft.legs.findIndex((l: any) => !l.game_id);
-                    if (missing !== -1) {
-                      setImportError(`Please select a game for leg #${missing + 1} before confirming.`);
-                      return;
-                    }
-                  }
+  type="button"
+  style={buttonStyle}
+  onClick={async () => {
+    if (importDraft?.bet_type === "parlay" && Array.isArray(importDraft.legs)) {
+      const missing = importDraft.legs.findIndex((l: any) => !l.game_id);
+      if (missing !== -1) {
+        setImportError(`Please select a game for leg #${missing + 1} before confirming.`);
+        return;
+      }
+    }
 
-                  // swap in edited draft then run your existing confirmImport()
-                  setImportResult((prev: any) => ({ ...(prev ?? {}), parsed: importDraft }));
-                  await confirmImport();
-                }}
-              >
-                Confirm & Add
-              </button>
-            </div>
+    await confirmImport(importDraft); // ✅ use edited draft immediately
+  }}
+>
+  Confirm & Add
+</button>
+
 
             {importError && <div style={{ color: "crimson", marginTop: 10 }}>{importError}</div>}
           </div>
