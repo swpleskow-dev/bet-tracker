@@ -1809,98 +1809,28 @@ if (!slip) return;
         </button>
       </div>
 
-      {importDraft.bet_type === "parlay" && Array.isArray(importDraft.legs) && (
+      {/* ---- helper: update a batch bet ---- */}
+      {/*
+        ✅ REQUIRED: add this function ABOVE your return() (near updateImportLeg)
+        function updateImportBatchBet(idx: number, patch: any) {
+          setImportDraft((prev: any) => {
+            if (!prev?.bets || !Array.isArray(prev.bets)) return prev;
+            const next = { ...prev };
+            next.bets = prev.bets.map((b: any, i: number) => (i === idx ? { ...b, ...patch } : b));
+            return next;
+          });
+        }
+      */}
+
+      {/* ---- PARLAY UI ---- */}
+      {importDraft?.bet_type === "parlay" && Array.isArray(importDraft.legs) ? (
         <div style={{ marginTop: 12 }}>
           <div style={{ fontWeight: 900, marginBottom: 8 }}>Parlay legs</div>
 
           <div style={{ display: "grid", gap: 10 }}>
             {importDraft.legs.map((leg: any, idx: number) => (
               <div key={idx} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 10,
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                  }}
-                  {importDraft.kind === "batch" && Array.isArray(importDraft.bets) && (
-  <div style={{ marginTop: 12 }}>
-    <div style={{ fontWeight: 900, marginBottom: 8 }}>Straight bets</div>
-
-    <div style={{ display: "grid", gap: 10 }}>
-      {importDraft.bets.map((b: any, idx: number) => (
-        <div key={idx} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-          <div style={{ fontWeight: 800 }}>
-            {b.bet_type} — {b.selection ?? ""}
-            {b.line != null ? ` (${b.line})` : ""} • odds {b.odds ?? "—"}
-          </div>
-
-          <div style={{ marginTop: 8, fontSize: 12, fontWeight: 800, color: !b.game_id ? "crimson" : "green" }}>
-            {!b.game_id ? "Needs game selected" : "Game linked"}
-          </div>
-
-          <div style={{ marginTop: 10, position: "relative" }}>
-            <label style={{ fontSize: 12, opacity: 0.7, marginBottom: 4, display: "block" }}>
-              Select the correct game for this bet
-            </label>
-
-            <input
-              value={importLegSearchText[idx] ?? ""}
-              onChange={(e) => searchGamesForLeg(idx, e.target.value)}
-              placeholder="Search team (DAL, Cowboys, Lions, DET...)"
-              style={inputStyle}
-            />
-
-            {importLegSearchError[idx] && (
-              <div style={{ marginTop: 6, fontSize: 12, color: "crimson" }}>{importLegSearchError[idx]}</div>
-            )}
-
-            {(importLegSearchOpen[idx] ?? false) && (
-              <div style={dropdownStyle}>
-                {importLegSearchLoading[idx] ? (
-                  <div style={rowStyle}>Searching…</div>
-                ) : (importLegSearchText[idx] ?? "").trim().length < 2 ? (
-                  <div style={rowStyle}>Type at least 2 characters…</div>
-                ) : (importLegSearchResults[idx] ?? []).length === 0 ? (
-                  <div style={rowStyle}>No matches</div>
-                ) : (
-                  (importLegSearchResults[idx] ?? []).map((g) => (
-                    <div
-                      key={g.game_id}
-                      style={rowStyle}
-                      onClick={() => {
-                        updateImportBatchBet(idx, { game_id: g.game_id });
-                        setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
-                        setImportLegSearchText((p) => ({
-                          ...p,
-                          [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}`,
-                        }));
-                      }}
-                    >
-                      <div style={{ fontWeight: 700 }}>{g.away_team} @ {g.home_team}</div>
-                      <div style={{ fontSize: 12, opacity: 0.75 }}>
-                        {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} • {statusText(g)}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-
-            {b.game_id && (
-              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-                Linked game_id: <b>{b.game_id}</b>
-              </div>
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>
-)}
-
-                >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <div style={{ fontWeight: 800 }}>
                     {leg.bet_type} — {leg.selection ?? ""}
                     {leg.line != null ? ` (${leg.line})` : ""} • odds {leg.odds ?? "—"}
@@ -1924,9 +1854,7 @@ if (!slip) return;
                   />
 
                   {importLegSearchError[idx] && (
-                    <div style={{ marginTop: 6, fontSize: 12, color: "crimson" }}>
-                      {importLegSearchError[idx]}
-                    </div>
+                    <div style={{ marginTop: 6, fontSize: 12, color: "crimson" }}>{importLegSearchError[idx]}</div>
                   )}
 
                   {(importLegSearchOpen[idx] ?? false) && (
@@ -1943,14 +1871,7 @@ if (!slip) return;
                             key={g.game_id}
                             style={rowStyle}
                             onClick={() => {
-                              updateImportLeg(idx, {
-                                game_id: g.game_id,
-                                game: {
-                                  game_date: g.game_date,
-                                  home_team: g.home_team,
-                                  away_team: g.away_team,
-                                },
-                              });
+                              updateImportLeg(idx, { game_id: g.game_id });
                               setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
                               setImportLegSearchText((p) => ({
                                 ...p,
@@ -1980,7 +1901,89 @@ if (!slip) return;
             ))}
           </div>
         </div>
-      )}
+      ) : null}
+
+      {/* ---- BATCH UI ---- */}
+      {importDraft?.kind === "batch" && Array.isArray(importDraft.bets) ? (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontWeight: 900, marginBottom: 8 }}>Straight bets</div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            {importDraft.bets.map((b: any, idx: number) => (
+              <div key={idx} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ fontWeight: 800 }}>
+                    {b.bet_type} — {b.selection ?? ""}
+                    {b.line != null ? ` (${b.line})` : ""} • odds {b.odds ?? "—"}
+                  </div>
+
+                  <div style={{ fontSize: 12, fontWeight: 800, color: !b.game_id ? "crimson" : "green" }}>
+                    {!b.game_id ? "Needs game selected" : "Game linked"}
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 10, position: "relative" }}>
+                  <label style={{ fontSize: 12, opacity: 0.7, marginBottom: 4, display: "block" }}>
+                    Select the correct game for this bet
+                  </label>
+
+                  <input
+                    value={importLegSearchText[idx] ?? ""}
+                    onChange={(e) => searchGamesForLeg(idx, e.target.value)}
+                    placeholder="Search team (DAL, Cowboys, Lions, DET...)"
+                    style={inputStyle}
+                  />
+
+                  {importLegSearchError[idx] && (
+                    <div style={{ marginTop: 6, fontSize: 12, color: "crimson" }}>{importLegSearchError[idx]}</div>
+                  )}
+
+                  {(importLegSearchOpen[idx] ?? false) && (
+                    <div style={dropdownStyle}>
+                      {importLegSearchLoading[idx] ? (
+                        <div style={rowStyle}>Searching…</div>
+                      ) : (importLegSearchText[idx] ?? "").trim().length < 2 ? (
+                        <div style={rowStyle}>Type at least 2 characters…</div>
+                      ) : (importLegSearchResults[idx] ?? []).length === 0 ? (
+                        <div style={rowStyle}>No matches</div>
+                      ) : (
+                        (importLegSearchResults[idx] ?? []).map((g) => (
+                          <div
+                            key={g.game_id}
+                            style={rowStyle}
+                            onClick={() => {
+                              // ✅ batch uses updateImportBatchBet
+                              updateImportBatchBet(idx, { game_id: g.game_id });
+                              setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
+                              setImportLegSearchText((p) => ({
+                                ...p,
+                                [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}`,
+                              }));
+                            }}
+                          >
+                            <div style={{ fontWeight: 700 }}>
+                              {g.away_team} @ {g.home_team}
+                            </div>
+                            <div style={{ fontSize: 12, opacity: 0.75 }}>
+                              {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} • {statusText(g)}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+
+                  {b.game_id && (
+                    <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+                      Linked game_id: <b>{b.game_id}</b>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <pre
         style={{
@@ -2012,6 +2015,7 @@ if (!slip) return;
           type="button"
           style={buttonStyle}
           onClick={async () => {
+            // validate game links
             if (importDraft?.bet_type === "parlay" && Array.isArray(importDraft.legs)) {
               const missing = importDraft.legs.findIndex((l: any) => !l.game_id);
               if (missing !== -1) {
@@ -2020,26 +2024,27 @@ if (!slip) return;
               }
             }
             if (importDraft?.kind === "batch" && Array.isArray(importDraft.bets)) {
-  const missing = importDraft.bets.findIndex((b: any) => !b.game_id);
-  if (missing !== -1) {
-    setImportError(`Please select a game for bet #${missing + 1} before confirming.`);
-    return;
-  }
-}
+              const missing = importDraft.bets.findIndex((b: any) => !b.game_id);
+              if (missing !== -1) {
+                setImportError(`Please select a game for bet #${missing + 1} before confirming.`);
+                return;
+              }
+            }
 
-
-            await confirmImport(importDraft);
+            // ✅ run existing confirmImport(), but make sure it reads importResult.parsed
+            setImportResult((prev: any) => ({ ...(prev ?? {}), parsed: importDraft }));
+            await confirmImport();
           }}
         >
           Confirm & Add
         </button>
       </div>
-      
 
       {importError && <div style={{ color: "crimson", marginTop: 10 }}>{importError}</div>}
     </div>
   </div>
 ) : null}
+
       </main>
 );
 } 
