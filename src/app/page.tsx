@@ -103,12 +103,9 @@ function normalizeOverride(v: string | null | undefined): Result | null {
 function teamKey(s?: string | null) {
   const x = (s ?? "").toUpperCase().trim();
   if (!x) return "";
-  // take first token, remove non-letters: "DAL COWBOYS" -> "DAL"
   const first = x.split(/\s+/)[0] ?? "";
   return first.replace(/[^A-Z]/g, "");
 }
-
-
 
 function calcResultLike(
   betType: "moneyline" | "spread" | "total",
@@ -126,7 +123,6 @@ function calcResultLike(
   const away = g.away_team;
   const home = g.home_team;
 
-  // Totals (over/under) don't depend on team names
   if (betType === "total") {
     const ln = Number(line ?? NaN);
     if (!Number.isFinite(ln)) return { label: "Pending", tone: "neutral" };
@@ -144,7 +140,6 @@ function calcResultLike(
     return won ? { label: "Won", tone: "good" } : { label: "Lost", tone: "bad" };
   }
 
-  // Normalize team comparisons so "DAL COWBOYS" matches "DAL"
   const pickKey = teamKey(selection);
   const awayKey = teamKey(away);
   const homeKey = teamKey(home);
@@ -170,18 +165,6 @@ function calcResultLike(
   // moneyline
   if (hs === as) return { label: "Push", tone: "neutral" };
 
-  const won = pickedHome ? hs > as : pickedAway ? as > hs : false;
-  return won ? { label: "Won", tone: "good" } : { label: "Lost", tone: "bad" };
-}
-
-
-  // moneyline
-  const pick = selection.toUpperCase();
-  const pickedAway = pick === away;
-  const pickedHome = pick === home;
-  if (!pickedAway && !pickedHome) return { label: "Pending", tone: "neutral" };
-
-  if (hs === as) return { label: "Push", tone: "neutral" };
   const won = pickedHome ? hs > as : pickedAway ? as > hs : false;
   return won ? { label: "Won", tone: "good" } : { label: "Lost", tone: "bad" };
 }
