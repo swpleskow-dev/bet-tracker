@@ -310,6 +310,18 @@ export default function Page() {
   const [propLine, setPropLine] = useState("");
   const [propNotes, setPropNotes] = useState("");
 
+  // import: single-bet game picker
+const [importSingleSearch, setImportSingleSearch] = useState("");
+const [importSingleOpen, setImportSingleOpen] = useState(false);
+const [importSingleLoading, setImportSingleLoading] = useState(false);
+const [importSingleResults, setImportSingleResults] = useState<GameRow[]>([]);
+const [importSingleError, setImportSingleError] = useState<string>("");
+
+function updateImportSingle(patch: any) {
+setImportDraft((prev:any) => ({ ...prev, game_id: g.game_id }));
+}
+
+
   // ---- parlay builder ----
   type DraftLeg = {
     tmpId: string;
@@ -360,6 +372,39 @@ const [importLegSearchOpen, setImportLegSearchOpen] = useState<Record<number, bo
 const [importLegSearchLoading, setImportLegSearchLoading] = useState<Record<number, boolean>>({});
 const [importLegSearchResults, setImportLegSearchResults] = useState<Record<number, GameRow[]>>({});
 
+
+  async function searchGamesForImportedSingle(q: string) {
+  const query = q.trim();
+  setImportSingleSearch(q);
+  setImportSingleError("");
+
+  if (query.length < 2) {
+    setImportSingleResults([]);
+    setImportSingleOpen(false);
+    return;
+  }
+
+  setImportSingleLoading(true);
+  setImportSingleOpen(true);
+
+  try {
+    const r = await fetch(`/api/nfl/search?q=${encodeURIComponent(query)}`, { cache: "no-store" });
+    const j = await r.json().catch(() => null);
+
+    if (!r.ok) {
+      setImportSingleResults([]);
+      setImportSingleError(j?.error ? String(j.error) : `Search failed (${r.status})`);
+      return;
+    }
+
+    setImportSingleResults((j?.games ?? []) as GameRow[]);
+  } catch (e: any) {
+    setImportSingleResults([]);
+    setImportSingleError(e?.message ?? "Network error");
+  } finally {
+    setImportSingleLoading(false);
+  }
+}
 
 function updateImportLeg(idx: number, patch: any) {
   setImportDraft((prev: any) => {
@@ -1103,9 +1148,10 @@ if (!r.ok) {
   async function confirmImport(slipOverride?: any) {
   setImportError(null);
 
-  const slip = importDraft ?? (importResult as any)?.parsed;
-if (!slip) return;
-
+  // ✅ always prefer what was passed in (edited draft from modal),
+  // then fallback to importDraft, then fallback to importResult.parsed
+  const slip = slipOverride ?? importDraft ?? (importResult as any)?.parsed;
+  if (!slip) return;
 
   const game_id_from_result = (importResult as any)?.game_id ?? null;
 
@@ -1159,40 +1205,47 @@ if (!slip) return;
   /* ----------------------------------------
      2) SINGLE BET (moneyline / spread / total)
   -----------------------------------------*/
-  if (slip.bet_type !== "parlay") {
-    if (!game_id_from_result) {
-      setImportError("Could not match this bet to a game.");
-      return;
-    }
+  /*------------------------------------------
+  2) SINGLE BET (moneyline / spread / total)
+  -----------------------------------------*/
+if (slip.bet_type !== "parlay" && slip.bet_type !== "player_prop") {
+  // 1) Prefer the game picked in the modal (slip.game_id)
+  // 2) Fall back to the auto-matched game_id from the API response
+  const game_id = slip?.game_id ?? game_id_from_result ?? null;
 
-    const { error } = await supabase.from("bets").insert({
-      user_id: USER_ID,
-      bettor: importBettor,
-      sport: "NFL",
-      game_id: game_id_from_result,
-      bet_type: slip.bet_type,
-      selection: slip.selection ?? "",
-      line: slip.bet_type === "moneyline" ? null : Number(slip.line ?? 0),
-      stake: Number(slip.stake ?? 1),
-      odds: Number(slip.odds ?? -110),
-      parlay_id: null,
-      prop_player: null,
-      prop_market: null,
-      prop_side: null,
-      prop_line: null,
-      prop_notes: "Imported from screenshot",
-      result_override: null,
-    });
-
-    if (error) {
-      setImportError(error.message);
-      return;
-    }
-
-    setImportOpen(false);
-    await loadAll();
+  if (!game_id) {
+    setImportError("Please select a game for this bet before confirming.");
     return;
   }
+
+  const { error } = await supabase.from("bets").insert({
+    user_id: USER_ID,
+    bettor: importBettor,
+    sport: "NFL",
+    game_id,
+    bet_type: slip.bet_type,
+    selection: slip.selection ?? "",
+    line: slip.bet_type === "moneyline" ? null : Number(slip.line ?? 0),
+    stake: Number(slip.stake ?? 1),
+    odds: Number(slip.odds ?? -110),
+    parlay_id: null,
+    prop_player: null,
+    prop_market: null,
+    prop_side: null,
+    prop_line: null,
+    prop_notes: "Imported from screenshot",
+    result_override: null,
+  });
+
+  if (error) {
+    setImportError(error.message);
+    return;
+  }
+
+  setImportOpen(false);
+  await loadAll();
+  return;
+}
 
   /* ----------------------------------------
      3) PARLAY
@@ -1781,7 +1834,7 @@ if (!slip) return;
       </div>
 
             {/* Confirm import modal */}
-{importOpen && importResult && importDraft ? (
+{importOpen && importDraft ? (
   <div
     style={{
       position: "fixed",
@@ -1809,24 +1862,79 @@ if (!slip) return;
         </button>
       </div>
 
-      {/* ---- helper: update a batch bet ---- */}
-      {/*
-        ✅ REQUIRED: add this function ABOVE your return() (near updateImportLeg)
-        function updateImportBatchBet(idx: number, patch: any) {
-          setImportDraft((prev: any) => {
-            if (!prev?.bets || !Array.isArray(prev.bets)) return prev;
-            const next = { ...prev };
-            next.bets = prev.bets.map((b: any, i: number) => (i === idx ? { ...b, ...patch } : b));
-            return next;
-          });
-        }
-      */}
+      {/* ✅ SINGLE imported bet needs game picker */}
+      {importDraft?.bet_type !== "parlay" && importDraft?.kind !== "batch" && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontWeight: 900, marginBottom: 8 }}>Link this bet to a game</div>
 
-      {/* ---- PARLAY UI ---- */}
-      {importDraft?.bet_type === "parlay" && Array.isArray(importDraft.legs) ? (
+          <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 8 }}>
+            Parsed: <b>{importDraft.bet_type}</b> — <b>{importDraft.selection ?? "—"}</b>{" "}
+            {importDraft.line != null ? `(${importDraft.line})` : ""} • odds <b>{importDraft.odds ?? "—"}</b>
+          </div>
+
+          <div style={{ marginTop: 10, position: "relative" }}>
+            <label style={{ fontSize: 12, opacity: 0.7, marginBottom: 4, display: "block" }}>
+              Search the correct game (team abbrev, city, etc)
+            </label>
+
+            <input
+              value={importSingleSearch}
+              onChange={(e) => searchGamesForImportedSingle(e.target.value)}
+              placeholder="DAL, Cowboys, Lions, DET..."
+              style={inputStyle}
+            />
+
+            {importSingleError && <div style={{ marginTop: 6, fontSize: 12, color: "crimson" }}>{importSingleError}</div>}
+
+            {importSingleOpen && (
+              <div style={{ ...dropdownStyle, zIndex: 9999 }}>
+                {importSingleLoading ? (
+                  <div style={rowStyle}>Searching…</div>
+                ) : importSingleSearch.trim().length < 2 ? (
+                  <div style={rowStyle}>Type at least 2 characters…</div>
+                ) : importSingleResults.length === 0 ? (
+                  <div style={rowStyle}>No matches</div>
+                ) : (
+                  importSingleResults.map((g) => (
+                    <div
+                      key={g.game_id}
+                      style={rowStyle}
+                      onClick={() => {
+                        updateImportSingle({
+                          game_id: g.game_id,
+                          game: {
+                            game_date: g.game_date,
+                            home_team: g.home_team,
+                            away_team: g.away_team,
+                          },
+                        });
+                        setImportSingleOpen(false);
+                        setImportSingleSearch(`${g.away_team} @ ${g.home_team} — ${g.game_date}`);
+                      }}
+                    >
+                      <div style={{ fontWeight: 700 }}>
+                        {g.away_team} @ {g.home_team}
+                      </div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>
+                        {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} • {statusText(g)}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            <div style={{ marginTop: 8, fontSize: 12, fontWeight: 800, color: !importDraft.game_id ? "crimson" : "green" }}>
+              {!importDraft.game_id ? "Needs game selected" : `Game linked: ${importDraft.game_id}`}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ Parlay legs UI (your existing one) */}
+      {importDraft.bet_type === "parlay" && Array.isArray(importDraft.legs) && (
         <div style={{ marginTop: 12 }}>
           <div style={{ fontWeight: 900, marginBottom: 8 }}>Parlay legs</div>
-
           <div style={{ display: "grid", gap: 10 }}>
             {importDraft.legs.map((leg: any, idx: number) => (
               <div key={idx} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
@@ -1835,7 +1943,6 @@ if (!slip) return;
                     {leg.bet_type} — {leg.selection ?? ""}
                     {leg.line != null ? ` (${leg.line})` : ""} • odds {leg.odds ?? "—"}
                   </div>
-
                   <div style={{ fontSize: 12, fontWeight: 800, color: !leg.game_id ? "crimson" : "green" }}>
                     {!leg.game_id ? "Needs game selected" : "Game linked"}
                   </div>
@@ -1858,7 +1965,7 @@ if (!slip) return;
                   )}
 
                   {(importLegSearchOpen[idx] ?? false) && (
-                    <div style={dropdownStyle}>
+                    <div style={{ ...dropdownStyle, zIndex: 9999 }}>
                       {importLegSearchLoading[idx] ? (
                         <div style={rowStyle}>Searching…</div>
                       ) : (importLegSearchText[idx] ?? "").trim().length < 2 ? (
@@ -1873,15 +1980,10 @@ if (!slip) return;
                             onClick={() => {
                               updateImportLeg(idx, { game_id: g.game_id });
                               setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
-                              setImportLegSearchText((p) => ({
-                                ...p,
-                                [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}`,
-                              }));
+                              setImportLegSearchText((p) => ({ ...p, [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}` }));
                             }}
                           >
-                            <div style={{ fontWeight: 700 }}>
-                              {g.away_team} @ {g.home_team}
-                            </div>
+                            <div style={{ fontWeight: 700 }}>{g.away_team} @ {g.home_team}</div>
                             <div style={{ fontSize: 12, opacity: 0.75 }}>
                               {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} • {statusText(g)}
                             </div>
@@ -1890,114 +1992,12 @@ if (!slip) return;
                       )}
                     </div>
                   )}
-
-                  {leg.game_id && (
-                    <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-                      Linked game_id: <b>{leg.game_id}</b>
-                    </div>
-                  )}
                 </div>
               </div>
             ))}
           </div>
         </div>
-      ) : null}
-
-      {/* ---- BATCH UI ---- */}
-      {importDraft?.kind === "batch" && Array.isArray(importDraft.bets) ? (
-        <div style={{ marginTop: 12 }}>
-          <div style={{ fontWeight: 900, marginBottom: 8 }}>Straight bets</div>
-
-          <div style={{ display: "grid", gap: 10 }}>
-            {importDraft.bets.map((b: any, idx: number) => (
-              <div key={idx} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                  <div style={{ fontWeight: 800 }}>
-                    {b.bet_type} — {b.selection ?? ""}
-                    {b.line != null ? ` (${b.line})` : ""} • odds {b.odds ?? "—"}
-                  </div>
-
-                  <div style={{ fontSize: 12, fontWeight: 800, color: !b.game_id ? "crimson" : "green" }}>
-                    {!b.game_id ? "Needs game selected" : "Game linked"}
-                  </div>
-                </div>
-
-                <div style={{ marginTop: 10, position: "relative" }}>
-                  <label style={{ fontSize: 12, opacity: 0.7, marginBottom: 4, display: "block" }}>
-                    Select the correct game for this bet
-                  </label>
-
-                  <input
-                    value={importLegSearchText[idx] ?? ""}
-                    onChange={(e) => searchGamesForLeg(idx, e.target.value)}
-                    placeholder="Search team (DAL, Cowboys, Lions, DET...)"
-                    style={inputStyle}
-                  />
-
-                  {importLegSearchError[idx] && (
-                    <div style={{ marginTop: 6, fontSize: 12, color: "crimson" }}>{importLegSearchError[idx]}</div>
-                  )}
-
-                  {(importLegSearchOpen[idx] ?? false) && (
-                    <div style={dropdownStyle}>
-                      {importLegSearchLoading[idx] ? (
-                        <div style={rowStyle}>Searching…</div>
-                      ) : (importLegSearchText[idx] ?? "").trim().length < 2 ? (
-                        <div style={rowStyle}>Type at least 2 characters…</div>
-                      ) : (importLegSearchResults[idx] ?? []).length === 0 ? (
-                        <div style={rowStyle}>No matches</div>
-                      ) : (
-                        (importLegSearchResults[idx] ?? []).map((g) => (
-                          <div
-                            key={g.game_id}
-                            style={rowStyle}
-                            onClick={() => {
-                              // ✅ batch uses updateImportBatchBet
-                              updateImportBatchBet(idx, { game_id: g.game_id });
-                              setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
-                              setImportLegSearchText((p) => ({
-                                ...p,
-                                [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}`,
-                              }));
-                            }}
-                          >
-                            <div style={{ fontWeight: 700 }}>
-                              {g.away_team} @ {g.home_team}
-                            </div>
-                            <div style={{ fontSize: 12, opacity: 0.75 }}>
-                              {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} • {statusText(g)}
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  )}
-
-                  {b.game_id && (
-                    <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-                      Linked game_id: <b>{b.game_id}</b>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      <pre
-        style={{
-          marginTop: 12,
-          padding: 12,
-          background: "#f7f7f8",
-          borderRadius: 12,
-          overflowX: "auto",
-          fontSize: 12,
-          maxHeight: 260,
-        }}
-      >
-        {JSON.stringify({ parsed: importDraft }, null, 2)}
-      </pre>
+      )}
 
       <div style={{ display: "flex", gap: 10, marginTop: 12, justifyContent: "flex-end" }}>
         <button
@@ -2015,7 +2015,15 @@ if (!slip) return;
           type="button"
           style={buttonStyle}
           onClick={async () => {
-            // validate game links
+            // require game selection for single import
+            if (importDraft?.bet_type !== "parlay" && importDraft?.kind !== "batch") {
+              if (!importDraft?.game_id) {
+                setImportError("Please select a game before confirming.");
+                return;
+              }
+            }
+
+            // require game selection for parlay legs
             if (importDraft?.bet_type === "parlay" && Array.isArray(importDraft.legs)) {
               const missing = importDraft.legs.findIndex((l: any) => !l.game_id);
               if (missing !== -1) {
@@ -2023,17 +2031,8 @@ if (!slip) return;
                 return;
               }
             }
-            if (importDraft?.kind === "batch" && Array.isArray(importDraft.bets)) {
-              const missing = importDraft.bets.findIndex((b: any) => !b.game_id);
-              if (missing !== -1) {
-                setImportError(`Please select a game for bet #${missing + 1} before confirming.`);
-                return;
-              }
-            }
 
-            // ✅ run existing confirmImport(), but make sure it reads importResult.parsed
-            setImportResult((prev: any) => ({ ...(prev ?? {}), parsed: importDraft }));
-            await confirmImport();
+            await confirmImport(importDraft);
           }}
         >
           Confirm & Add
