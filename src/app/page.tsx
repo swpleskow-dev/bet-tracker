@@ -318,8 +318,9 @@ const [importSingleResults, setImportSingleResults] = useState<GameRow[]>([]);
 const [importSingleError, setImportSingleError] = useState<string>("");
 
 function updateImportSingle(patch: any) {
-setImportDraft((prev:any) => ({ ...prev, game_id: g.game_id }));
+  setImportDraft((prev: any) => ({ ...(prev ?? {}), ...patch }));
 }
+
 
 
   // ---- parlay builder ----
