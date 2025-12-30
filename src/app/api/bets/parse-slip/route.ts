@@ -178,7 +178,7 @@ async function matchGameIdFromParsedGame(game: any): Promise<string | null> {
  * - Every object has `required`
  * - required includes ALL keys in properties
  */
-const betSlipSchema = {
+const singleBetSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
@@ -268,6 +268,19 @@ const betSlipSchema = {
   ],
 } as const;
 
+const betSlipSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    bets: {
+      type: "array",
+      items: singleBetSchema,
+    },
+  },
+  required: ["bets"],
+} as const;
+
+
 export async function POST(req: Request) {
   try {
     if (!OPENAI_API_KEY) {
@@ -290,6 +303,12 @@ Rules:
 - Output MUST match the provided JSON schema exactly.
 - DO NOT omit fields: if unknown/not visible, set to null.
 - bet_type must be one of: moneyline | spread | total | player_prop | parlay
+
+MULTIPLE BETS RULE:
+- If the screenshot shows multiple separate rows (e.g. multiple "STRAIGHT BET" entries), output bets[] with one object per row.
+- Do NOT label it "parlay" just because multiple bets appear in one image.
+- Only use bet_type="parlay" if the slip explicitly indicates PARLAY/ParlayID/SGP or a single stake applies to multiple legs.
+
 
 IMPORTANT:
 - For totals: selection MUST be "over" or "under" (not "TOTAL").
@@ -365,22 +384,29 @@ Dates:
     }
 
     // Match top-level game (for singles/props). For parlays, legs can be unmatched.
-    const topGameId = await matchGameIdFromParsedGame(parsed?.game);
+   if (!Array.isArray(parsed?.bets)) {
+  return NextResponse.json({ error: "Parsed output missing bets[]", raw: parsed }, { status: 500 });
+}
 
-    // For legs: DO NOT force/override game_id if we can't match.
-    if (Array.isArray(parsed?.legs)) {
-      const legsWithIds = [];
-      for (const leg of parsed.legs) {
-        const legGameId = await matchGameIdFromParsedGame(leg?.game);
-        legsWithIds.push({ ...leg, game_id: legGameId ?? null });
-      }
-      parsed.legs = legsWithIds;
+const betsWithIds = [];
+for (const b of parsed.bets) {
+  const game_id = await matchGameIdFromParsedGame(b?.game);
+
+  let legs = b?.legs;
+  if (Array.isArray(legs)) {
+    const legsWithIds = [];
+    for (const leg of legs) {
+      const legGameId = await matchGameIdFromParsedGame(leg?.game);
+      legsWithIds.push({ ...leg, game_id: legGameId ?? null });
     }
+    legs = legsWithIds;
+  }
 
-    return NextResponse.json({
-      parsed,
-      game_id: topGameId ?? null,
-    });
+  betsWithIds.push({ ...b, game_id: game_id ?? null, legs });
+}
+
+return NextResponse.json({ parsed: { bets: betsWithIds } });
+
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "unknown" }, { status: 500 });
   }
