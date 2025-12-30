@@ -1137,7 +1137,7 @@ if (!r.ok) {
 }
 
       setImportResult(j);
-const p = data.parsed;
+const p = j.parsed;
 
 if (p && Array.isArray(p.bets) && p.bets.length > 0) {
   setImportDraft({
