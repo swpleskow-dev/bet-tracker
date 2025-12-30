@@ -321,6 +321,13 @@ function updateImportSingle(patch: any) {
   setImportDraft((prev: any) => ({ ...(prev ?? {}), ...patch }));
 }
 
+function updateImportBatchBet(idx: number, patch: any) {
+  setImportDraft((prev: any) => {
+    if (!prev || prev.kind !== "batch" || !Array.isArray(prev.bets)) return prev;
+    const bets = prev.bets.map((b: any, i: number) => (i === idx ? { ...b, ...patch } : b));
+    return { ...prev, bets };
+  });
+}
 
 
   // ---- parlay builder ----
@@ -1932,6 +1939,89 @@ if (slip.bet_type !== "parlay" && slip.bet_type !== "player_prop") {
         </div>
       )}
 
+{/* ✅ Batch of straight bets UI */}
+{importDraft?.kind === "batch" && Array.isArray(importDraft?.bets) && (
+  <div style={{ marginTop: 12 }}>
+    <div style={{ fontWeight: 900, marginBottom: 8 }}>
+      Multiple straight bets ({importDraft.bets.length})
+    </div>
+
+    <div style={{ display: "grid", gap: 10 }}>
+      {importDraft.bets.map((b: any, idx: number) => (
+        <div key={idx} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ fontWeight: 800 }}>
+              {b.bet_type} — {b.selection ?? "—"}
+              {b.line != null ? ` (${b.line})` : ""} • odds {b.odds ?? "—"} • stake {b.stake ?? "—"}
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: !b.game_id ? "crimson" : "green" }}>
+              {!b.game_id ? "Needs game selected" : "Game linked"}
+            </div>
+          </div>
+
+          <div style={{ marginTop: 10, position: "relative" }}>
+            <label style={{ fontSize: 12, opacity: 0.7, marginBottom: 4, display: "block" }}>
+              Select the correct game for this bet
+            </label>
+
+            <input
+              value={importLegSearchText[idx] ?? ""}
+              onChange={(e) => searchGamesForLeg(idx, e.target.value)}
+              placeholder="Search team (DAL, Cowboys, Lions, DET...)"
+              style={inputStyle}
+            />
+
+            {importLegSearchError[idx] && (
+              <div style={{ marginTop: 6, fontSize: 12, color: "crimson" }}>{importLegSearchError[idx]}</div>
+            )}
+
+            {(importLegSearchOpen[idx] ?? false) && (
+              <div style={{ ...dropdownStyle, zIndex: 9999 }}>
+                {importLegSearchLoading[idx] ? (
+                  <div style={rowStyle}>Searching…</div>
+                ) : (importLegSearchText[idx] ?? "").trim().length < 2 ? (
+                  <div style={rowStyle}>Type at least 2 characters…</div>
+                ) : (importLegSearchResults[idx] ?? []).length === 0 ? (
+                  <div style={rowStyle}>No matches</div>
+                ) : (
+                  (importLegSearchResults[idx] ?? []).map((g) => (
+                    <div
+                      key={g.game_id}
+                      style={rowStyle}
+                      onClick={() => {
+                        // update the idx-th bet in the batch
+                        updateImportBatchBet(idx, {
+                          game_id: g.game_id,
+                          game: {
+                            game_date: g.game_date,
+                            home_team: g.home_team,
+                            away_team: g.away_team,
+                          },
+                        });
+
+                        setImportLegSearchOpen((p) => ({ ...p, [idx]: false }));
+                        setImportLegSearchText((p) => ({ ...p, [idx]: `${g.away_team} @ ${g.home_team} — ${g.game_date}` }));
+                      }}
+                    >
+                      <div style={{ fontWeight: 700 }}>
+                        {g.away_team} @ {g.home_team}
+                      </div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>
+                        {g.game_date} • {(g.away_score ?? 0)}-{(g.home_score ?? 0)} • {statusText(g)}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
+
+      
       {/* ✅ Parlay legs UI (your existing one) */}
       {importDraft.bet_type === "parlay" && Array.isArray(importDraft.legs) && (
         <div style={{ marginTop: 12 }}>
@@ -2017,12 +2107,15 @@ if (slip.bet_type !== "parlay" && slip.bet_type !== "player_prop") {
           style={buttonStyle}
           onClick={async () => {
             // require game selection for single import
-            if (importDraft?.bet_type !== "parlay" && importDraft?.kind !== "batch") {
-              if (!importDraft?.game_id) {
-                setImportError("Please select a game before confirming.");
-                return;
-              }
-            }
+            // require game selection for batch import
+if (importDraft?.kind === "batch" && Array.isArray(importDraft?.bets)) {
+  const missing = importDraft.bets.findIndex((b: any) => !b.game_id);
+  if (missing !== -1) {
+    setImportError(`Please select a game for bet #${missing + 1} before confirming.`);
+    return;
+  }
+}
+
 
             // require game selection for parlay legs
             if (importDraft?.bet_type === "parlay" && Array.isArray(importDraft.legs)) {
