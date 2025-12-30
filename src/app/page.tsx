@@ -422,14 +422,7 @@ function updateImportLeg(idx: number, patch: any) {
     return next;
   });
 }
-  function updateImportBatchBet(idx: number, patch: any) {
-  setImportDraft((prev: any) => {
-    if (!prev?.bets || !Array.isArray(prev.bets)) return prev;
-    const next = { ...prev };
-    next.bets = prev.bets.map((b: any, i: number) => (i === idx ? { ...b, ...patch } : b));
-    return next;
-  });
-}
+ 
 
 
 async function searchGamesForLeg(idx: number, q: string) {
