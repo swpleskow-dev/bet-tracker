@@ -1137,7 +1137,16 @@ if (!r.ok) {
 }
 
       setImportResult(j);
-      setImportDraft(j.parsed); // <-- ADD THIS
+const p = data.parsed;
+
+if (p && Array.isArray(p.bets) && p.bets.length > 0) {
+  setImportDraft({
+    kind: "batch",
+    bets: p.bets,
+  });
+} else {
+  setImportDraft(p);
+}
       setImportOpen(true);
     } catch (e: any) {
       setImportError(e?.message ?? "Parse failed");
